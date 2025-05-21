@@ -1,3 +1,4 @@
 [console_scripts]
+explorer = turtlebot_sensor.explorer:main
 sync_node = turtlebot_sensor.sync_node:main
 

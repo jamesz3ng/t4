@@ -25,6 +25,9 @@ setup(
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": ["sync_node = turtlebot_sensor.sync_node:main"],
+        'console_scripts': [
+            'sync_node = turtlebot_sensor.sync_node:main',
+            'explorer = turtlebot_sensor.explorer:main',  # Change this line to match your file name
+        ],
     },
 )

@@ -9,10 +9,14 @@ setup.py
 ../build/turtlebot_sensor/turtlebot_sensor.egg-info/requires.txt
 ../build/turtlebot_sensor/turtlebot_sensor.egg-info/top_level.txt
 ../build/turtlebot_sensor/turtlebot_sensor.egg-info/zip-safe
+launch/mapping.launch.py
+launch/slam.launch.py
 launch/sync.launch.py
 resource/turtlebot_sensor
 test/test_copyright.py
 test/test_flake8.py
 test/test_pep257.py
 turtlebot_sensor/__init__.py
+turtlebot_sensor/explorer.py
+turtlebot_sensor/hsv_tuner.py
 turtlebot_sensor/sync_node.py

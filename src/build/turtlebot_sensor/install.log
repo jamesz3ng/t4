@@ -1,10 +1,16 @@
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/sync_node.py
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__init__.py
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/hsv_tuner.py
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/explorer.py
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__pycache__/sync_node.cpython-310.pyc
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__pycache__/__init__.cpython-310.pyc
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__pycache__/hsv_tuner.cpython-310.pyc
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__pycache__/explorer.cpython-310.pyc
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/ament_index/resource_index/packages/turtlebot_sensor
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/package.xml
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/launch/sync.launch.py
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/launch/slam.launch.py
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/launch/mapping.launch.py
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/PKG-INFO
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/zip-safe
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/dependency_links.txt
@@ -12,4 +18,5 @@
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/requires.txt
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/top_level.txt
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info/SOURCES.txt
+/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/turtlebot_sensor/explorer
 /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/turtlebot_sensor/sync_node
