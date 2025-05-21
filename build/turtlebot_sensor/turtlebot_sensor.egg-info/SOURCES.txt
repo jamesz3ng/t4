@@ -15,4 +15,5 @@ test/test_copyright.py
 test/test_flake8.py
 test/test_pep257.py
 turtlebot_sensor/__init__.py
+turtlebot_sensor/hsv_tuner.py
 turtlebot_sensor/sync_node.py
