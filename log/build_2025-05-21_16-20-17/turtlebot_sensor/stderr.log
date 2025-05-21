@@ -1,0 +1,5 @@
+  File "/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/sync_node.py", line 1
+    @@ -0,0 +1,183 @@
+     ^
+SyntaxError: invalid syntax
+

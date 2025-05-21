@@ -1,0 +1,40 @@
+[0.724s] Invoking command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/turtlebot_sensor': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/turtlebot_sensor build --build-base /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build install --record /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/install.log --single-version-externally-managed install_data
+[0.835s] running egg_info
+[0.835s] creating ../build/turtlebot_sensor/turtlebot_sensor.egg-info
+[0.843s] writing ../build/turtlebot_sensor/turtlebot_sensor.egg-info/PKG-INFO
+[0.851s] writing dependency_links to ../build/turtlebot_sensor/turtlebot_sensor.egg-info/dependency_links.txt
+[0.854s] writing entry points to ../build/turtlebot_sensor/turtlebot_sensor.egg-info/entry_points.txt
+[0.868s] writing requirements to ../build/turtlebot_sensor/turtlebot_sensor.egg-info/requires.txt
+[0.872s] writing top-level names to ../build/turtlebot_sensor/turtlebot_sensor.egg-info/top_level.txt
+[0.875s] writing manifest file '../build/turtlebot_sensor/turtlebot_sensor.egg-info/SOURCES.txt'
+[0.878s] reading manifest file '../build/turtlebot_sensor/turtlebot_sensor.egg-info/SOURCES.txt'
+[0.878s] adding license file 'LICENSE'
+[0.879s] writing manifest file '../build/turtlebot_sensor/turtlebot_sensor.egg-info/SOURCES.txt'
+[0.881s] running build
+[0.881s] running build_py
+[0.881s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build
+[0.885s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib
+[0.890s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib/turtlebot_sensor
+[0.897s] copying turtlebot_sensor/sync_node.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib/turtlebot_sensor
+[0.904s] copying turtlebot_sensor/__init__.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib/turtlebot_sensor
+[0.906s] running install
+[0.907s] running install_lib
+[0.909s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor
+[0.915s] copying /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib/turtlebot_sensor/sync_node.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor
+[0.923s] copying /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build/lib/turtlebot_sensor/__init__.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor
+[0.928s] byte-compiling /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/sync_node.py to sync_node.cpython-310.pyc
+[0.942s] byte-compiling /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/__init__.py to __init__.cpython-310.pyc
+[0.947s] running install_data
+[0.947s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/ament_index
+[0.950s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/ament_index/resource_index
+[0.955s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/ament_index/resource_index/packages
+[0.962s] copying resource/turtlebot_sensor -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/ament_index/resource_index/packages
+[0.966s] copying package.xml -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor
+[0.970s] creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/launch
+[0.976s] copying launch/sync.launch.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/share/turtlebot_sensor/launch
+[0.981s] running install_egg_info
+[0.982s] Copying ../build/turtlebot_sensor/turtlebot_sensor.egg-info to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info
+[1.019s] running install_scripts
+[1.031s] Installing sync_node script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/turtlebot_sensor
+[1.041s] writing list of installed files to '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/install.log'
+[1.060s] Invoked command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/turtlebot_sensor' returned '0': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/turtlebot_sensor build --build-base /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/build install --record /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/build/turtlebot_sensor/install.log --single-version-externally-managed install_data
