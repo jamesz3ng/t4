@@ -16,7 +16,7 @@ class TimeSyncNode(Node):
 
         self.declare_parameter(
             name="image_sub_topic",
-            value="/T8/oakd/rgb/image_raw/compressed",
+            value="/T7/oakd/rgb/image_raw/compressed",
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
             ),
