@@ -1,0 +1,22 @@
+[0.669s] Invoking command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build --no-deps symlink_data --force
+[0.790s] running develop
+[0.820s] /usr/lib/python3/dist-packages/pkg_resources/__init__.py:116: PkgResourcesDeprecationWarning: 2.22.1ubuntu1 is an invalid version and will not be supported in a future release
+[0.820s]   warnings.warn(
+[0.876s] running egg_info
+[0.878s] writing turtlebot_sensor.egg-info/PKG-INFO
+[0.881s] writing dependency_links to turtlebot_sensor.egg-info/dependency_links.txt
+[0.884s] writing entry points to turtlebot_sensor.egg-info/entry_points.txt
+[0.887s] writing requirements to turtlebot_sensor.egg-info/requires.txt
+[0.889s] writing top-level names to turtlebot_sensor.egg-info/top_level.txt
+[0.893s] reading manifest file 'turtlebot_sensor.egg-info/SOURCES.txt'
+[0.893s] writing manifest file 'turtlebot_sensor.egg-info/SOURCES.txt'
+[0.897s] running build_ext
+[0.897s] Creating /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot-sensor.egg-link (link to .)
+[0.913s] Installing sync_node script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.920s] 
+[0.921s] Installed /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor
+[0.921s] running symlink_data
+[0.921s] symbolically linking /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/resource/turtlebot_sensor -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/share/ament_index/resource_index/packages
+[0.924s] symbolically linking /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/package.xml -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/share/turtlebot_sensor
+[0.928s] symbolically linking /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/launch/sync.launch.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/share/turtlebot_sensor/launch
+[0.968s] Invoked command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor' returned '0': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build --no-deps symlink_data --force

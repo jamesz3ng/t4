@@ -1,0 +1,3 @@
+[console_scripts]
+sync_node = turtlebot_sensor.sync_node:main
+

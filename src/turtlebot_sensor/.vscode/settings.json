@@ -1,0 +1,20 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/anyone/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/pylon_camera2/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/marker_detector/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/cares_lib_ros2/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/camera_calibration/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/anyone/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/pylon_camera2/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/marker_detector/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/cares_lib_ros2/lib/python3.10/site-packages",
+        "/home/anyone/ros2_ws/install/camera_calibration/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}
