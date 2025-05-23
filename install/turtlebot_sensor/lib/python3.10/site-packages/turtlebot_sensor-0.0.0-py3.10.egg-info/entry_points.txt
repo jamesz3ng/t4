@@ -1,4 +1,5 @@
 [console_scripts]
 explorer = turtlebot_sensor.explorer:main
+plan_node = turtlebot_sensor.plan_node:main
 sync_node = turtlebot_sensor.sync_node:main
 

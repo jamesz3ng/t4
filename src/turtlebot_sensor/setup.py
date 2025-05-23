@@ -28,6 +28,7 @@ setup(
         'console_scripts': [
             'sync_node = turtlebot_sensor.sync_node:main',
             'explorer = turtlebot_sensor.explorer:main',  # Change this line to match your file name
+            'plan_node = turtlebot_sensor.plan_node:main'
         ],
     },
 )
