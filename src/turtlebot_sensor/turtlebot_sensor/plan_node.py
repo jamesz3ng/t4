@@ -135,17 +135,16 @@ class PlanningNode(Node):
         return math.atan2(siny_cosp, cosy_cosp)
 
     def bumper_callback(self, msg: Bool):
-        """
-        Simple bumper callback for Bool message type
-        """
+        current_time = time.time()
+        
         if msg.data and not self.bumper_triggered:
             self.bumper_triggered = True
-            self.front_bumper_hit = True  # Assume front bumper for Bool type
-            self.get_logger().warn("Bumper triggered! Initiating obstacle avoidance.")
+            self.last_bumper_time = current_time
             self.initiate_obstacle_avoidance()
-        elif not msg.data:
-            # Reset bumper flags when not pressed
-            self.reset_bumper_flags()
+        elif not msg.data and self.bumper_triggered:
+            # Only reset if bumper has been released for sufficient time
+            if current_time - self.last_bumper_time > 2.0:  # 2 second cooldown
+                self.reset_bumper_flags()
 
     def scan_callback(self, msg: LaserScan):
         """
@@ -435,7 +434,7 @@ class PlanningNode(Node):
         f_score = {start_grid_xy: self.get_a_star_heuristic(start_grid_xy, goal_grid_xy)}
         
         nodes_explored = 0
-        max_nodes = 10000  # Prevent infinite search
+        max_nodes = 30000  # Prevent infinite search
 
         while open_set and nodes_explored < max_nodes:
             current_f, current_grid_xy = heapq.heappop(open_set)
