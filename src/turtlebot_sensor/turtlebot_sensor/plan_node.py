@@ -4,7 +4,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import ColorRGBA, Bool
+from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener # Standard TF2 imports
 import tf2_ros # For specific exception types if needed
 
@@ -12,10 +13,19 @@ import numpy as np
 import heapq
 from scipy.ndimage import maximum_filter # Ensure scipy is installed
 import math
+import time
+from enum import Enum
 
 from std_msgs.msg import Header
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
+class ObstacleAvoidanceState(Enum):
+    NORMAL = "normal"
+    OBSTACLE_DETECTED = "obstacle_detected"
+    BACKING_UP = "backing_up" 
+    TURNING = "turning"
+    REPLANNING = "replanning"
 
 class PlanningNode(Node):
     def __init__(self):
@@ -49,6 +59,21 @@ class PlanningNode(Node):
         self.current_goal_pose = None # Renamed
         self.current_path = [] # Renamed
 
+        # Obstacle avoidance state
+        self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL
+        self.bumper_triggered = False
+        self.left_bumper_hit = False
+        self.right_bumper_hit = False
+        self.front_bumper_hit = False
+        self.obstacle_avoidance_start_time = 0.0
+        self.backup_distance = 0.0
+        self.target_backup_distance = 0.3  # meters to back up
+        self.turn_angle_completed = 0.0
+        self.target_turn_angle = 0.0  # radians to turn
+        self.robot_pose_when_obstacle_detected = None
+        self.replanning_attempts = 0
+        self.max_replanning_attempts = 3
+
         # IMPORTANT: For the tf_listener to receive data from namespaced /T<ID>/tf topics,
         # this node (PlanningNode) must either be LAUNCHED INTO THE /T<ID> NAMESPACE,
         # or if launched globally, its /tf and /tf_static subscriptions MUST BE REMAPPED at launch time:
@@ -61,28 +86,42 @@ class PlanningNode(Node):
         self.declare_parameter('goal_topic_base', 'goal_pose')
         self.declare_parameter('cmd_vel_topic_base', 'cmd_vel')
         self.declare_parameter('waypoints_topic_base', 'waypoints')
+        self.declare_parameter('bumper_topic_base', 'bumper')
+        self.declare_parameter('scan_topic_base', 'scan')
 
         map_topic_base = self.get_parameter('map_topic_base').get_parameter_value().string_value
         goal_topic_base = self.get_parameter('goal_topic_base').get_parameter_value().string_value
         cmd_vel_topic_base = self.get_parameter('cmd_vel_topic_base').get_parameter_value().string_value
         waypoints_topic_base = self.get_parameter('waypoints_topic_base').get_parameter_value().string_value
+        bumper_topic_base = self.get_parameter('bumper_topic_base').get_parameter_value().string_value
+        scan_topic_base = self.get_parameter('scan_topic_base').get_parameter_value().string_value
 
         # Construct full TOPIC names (these ARE namespaced)
         self.map_topic_actual = f"{self.robot_namespace}/{map_topic_base}"
         self.goal_topic_actual = f"{self.robot_namespace}/{goal_topic_base}"
         self.cmd_vel_topic_actual = f"{self.robot_namespace}/{cmd_vel_topic_base}"
         self.waypoints_topic_actual = f"{self.robot_namespace}/{waypoints_topic_base}"
+        self.bumper_topic_actual = f"{self.robot_namespace}/{bumper_topic_base}"
+        self.scan_topic_actual = f"{self.robot_namespace}/{scan_topic_base}"
 
         self.get_logger().info(f"Subscribing to map topic: {self.map_topic_actual}")
         self.get_logger().info(f"Subscribing to goal topic: {self.goal_topic_actual}")
+        self.get_logger().info(f"Subscribing to bumper topic: {self.bumper_topic_actual}")
         self.get_logger().info(f"Publishing cmd_vel to: {self.cmd_vel_topic_actual}")
         self.get_logger().info(f"Publishing waypoints to: {self.waypoints_topic_actual}")
 
         qos_map = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=1)
         qos_goal = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
+        qos_sensor = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=5)
 
         self.map_sub = self.create_subscription(OccupancyGrid, self.map_topic_actual, self.map_callback, qos_map)
         self.goal_sub = self.create_subscription(PoseStamped, self.goal_topic_actual, self.goal_callback, qos_goal)
+        
+        # For generic bumper support, we'll try Bool first (simple), then LaserScan as backup
+        self.bumper_sub = self.create_subscription(Bool, self.bumper_topic_actual, self.bumper_callback, qos_sensor)
+        # Alternative: subscribe to scan for proximity detection
+        self.scan_sub = self.create_subscription(LaserScan, self.scan_topic_actual, self.scan_callback, qos_sensor)
+        
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic_actual, 10)
         self.marker_pub = self.create_publisher(MarkerArray, self.waypoints_topic_actual, 10)
 
@@ -94,6 +133,165 @@ class PlanningNode(Node):
         siny_cosp = 2 * (q_geometry_msg.w * q_geometry_msg.z + q_geometry_msg.x * q_geometry_msg.y)
         cosy_cosp = 1 - 2 * (q_geometry_msg.y * q_geometry_msg.y + q_geometry_msg.z * q_geometry_msg.z)
         return math.atan2(siny_cosp, cosy_cosp)
+
+    def bumper_callback(self, msg: Bool):
+        """
+        Simple bumper callback for Bool message type
+        """
+        if msg.data and not self.bumper_triggered:
+            self.bumper_triggered = True
+            self.front_bumper_hit = True  # Assume front bumper for Bool type
+            self.get_logger().warn("Bumper triggered! Initiating obstacle avoidance.")
+            self.initiate_obstacle_avoidance()
+        elif not msg.data:
+            # Reset bumper flags when not pressed
+            self.reset_bumper_flags()
+
+    def scan_callback(self, msg: LaserScan):
+        """
+        Use laser scan as backup bumper detection for close obstacles
+        """
+        if not msg.ranges:
+            return
+            
+        # Check for very close obstacles (bumper simulation)
+        min_distance = 0.15  # 15cm - very close
+        front_angles = len(msg.ranges) // 6  # Front 60 degrees
+        center = len(msg.ranges) // 2
+        
+        # Check front region
+        front_ranges = msg.ranges[center - front_angles:center + front_angles]
+        valid_ranges = [r for r in front_ranges if msg.range_min <= r <= msg.range_max]
+        
+        if valid_ranges and min(valid_ranges) < min_distance:
+            if not self.bumper_triggered:
+                self.bumper_triggered = True
+                self.front_bumper_hit = True
+                self.get_logger().warn(f"Close obstacle detected at {min(valid_ranges):.2f}m! Initiating avoidance.")
+                self.initiate_obstacle_avoidance()
+
+    def reset_bumper_flags(self):
+        """Reset all bumper flags"""
+        self.left_bumper_hit = False
+        self.right_bumper_hit = False  
+        self.front_bumper_hit = False
+
+    def initiate_obstacle_avoidance(self):
+        """Start the obstacle avoidance sequence"""
+        if self.obstacle_avoidance_state == ObstacleAvoidanceState.NORMAL:
+            self.obstacle_avoidance_state = ObstacleAvoidanceState.OBSTACLE_DETECTED
+            self.obstacle_avoidance_start_time = time.time()
+            
+            # Store current robot pose for potential replanning
+            current_pos = self.get_current_robot_pose()
+            if current_pos:
+                self.robot_pose_when_obstacle_detected = current_pos
+            
+            self.get_logger().info("Starting obstacle avoidance maneuver")
+
+    def get_current_robot_pose(self):
+        """Get current robot pose in world coordinates"""
+        source_frames_to_try = [self.robot_base_footprint_tf_frame, self.robot_base_link_tf_frame]
+        
+        for source_frame_id in source_frames_to_try:
+            try:
+                transform_stamped = self.tf_buffer.lookup_transform(
+                    self.map_tf_frame,
+                    source_frame_id,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=0.1)
+                )
+                return {
+                    'x': transform_stamped.transform.translation.x,
+                    'y': transform_stamped.transform.translation.y,
+                    'yaw': self.quaternion_to_yaw(transform_stamped.transform.rotation)
+                }
+            except Exception as e:
+                continue
+        return None
+
+    def execute_obstacle_avoidance(self):
+        """
+        Execute the obstacle avoidance state machine
+        """
+        cmd = Twist()
+        current_time = time.time()
+        elapsed_time = current_time - self.obstacle_avoidance_start_time
+        
+        if self.obstacle_avoidance_state == ObstacleAvoidanceState.OBSTACLE_DETECTED:
+            # Transition to backing up
+            self.obstacle_avoidance_state = ObstacleAvoidanceState.BACKING_UP
+            self.backup_distance = 0.0
+            self.obstacle_avoidance_start_time = current_time
+            self.get_logger().info("Obstacle detected - starting backup maneuver")
+            
+        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.BACKING_UP:
+            # Back up for a short distance
+            backup_speed = -0.1  # Slow backward movement
+            backup_duration = 2.0  # seconds
+            
+            if elapsed_time < backup_duration:
+                cmd.linear.x = backup_speed
+                cmd.angular.z = 0.0
+                self.backup_distance += abs(backup_speed) * 0.2  # Assuming 5Hz update rate
+                self.get_logger().debug(f"Backing up... distance: {self.backup_distance:.2f}m")
+            else:
+                # Transition to turning
+                self.obstacle_avoidance_state = ObstacleAvoidanceState.TURNING
+                self.turn_angle_completed = 0.0
+                
+                # Determine turn direction based on which bumper was hit
+                if self.left_bumper_hit:
+                    self.target_turn_angle = -math.pi/2  # Turn right
+                elif self.right_bumper_hit:
+                    self.target_turn_angle = math.pi/2   # Turn left
+                else:  # front or unknown
+                    # Choose turn direction randomly or based on space
+                    self.target_turn_angle = math.pi/2 if np.random.random() > 0.5 else -math.pi/2
+                
+                self.obstacle_avoidance_start_time = current_time
+                self.get_logger().info(f"Backup complete - starting turn: {math.degrees(self.target_turn_angle):.1f} degrees")
+                
+        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.TURNING:
+            # Turn to avoid obstacle
+            turn_speed = 0.3 if self.target_turn_angle > 0 else -0.3
+            turn_duration = abs(self.target_turn_angle) / abs(turn_speed)
+            
+            if elapsed_time < turn_duration:
+                cmd.linear.x = 0.0
+                cmd.angular.z = turn_speed
+                self.turn_angle_completed = turn_speed * elapsed_time
+                self.get_logger().debug(f"Turning... angle: {math.degrees(self.turn_angle_completed):.1f} degrees")
+            else:
+                # Transition to replanning
+                self.obstacle_avoidance_state = ObstacleAvoidanceState.REPLANNING
+                self.obstacle_avoidance_start_time = current_time
+                self.get_logger().info("Turn complete - initiating replanning")
+                
+        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.REPLANNING:
+            # Brief pause before replanning
+            if elapsed_time > 1.0:  # 1 second pause
+                self.get_logger().info("Replanning path after obstacle avoidance")
+                self.plan_new_path()
+                
+                # Reset to normal state
+                self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL
+                self.bumper_triggered = False
+                self.reset_bumper_flags()
+                self.replanning_attempts += 1
+                
+                # If we've replanned too many times, consider goal unreachable
+                if self.replanning_attempts > self.max_replanning_attempts:
+                    self.get_logger().warn("Max replanning attempts reached. Goal may be unreachable.")
+                    self.current_path = []
+                    self.current_goal_pose = None
+                    self.replanning_attempts = 0
+            else:
+                # Stay still during pause
+                cmd.linear.x = 0.0
+                cmd.angular.z = 0.0
+        
+        return cmd
 
     def map_callback(self, msg: OccupancyGrid):
         self.get_logger().info(f"Map data received on '{self.map_topic_actual}' (Size: {msg.info.width}x{msg.info.height}, Res: {msg.info.resolution:.3f})", throttle_duration_sec=10.0)
@@ -127,10 +325,20 @@ class PlanningNode(Node):
         self.inflated_map_storage = self.map_data_storage.copy()
         self.inflated_map_storage[inflated_regions_mask > 0] = 100 # Mark inflated areas as occupied
         
+        # Debug: Log map statistics
+        total_cells = self.inflated_map_storage.size
+        free_cells = np.sum(self.inflated_map_storage == 0)
+        occupied_cells = np.sum(self.inflated_map_storage == 100) 
+        unknown_cells = np.sum(self.inflated_map_storage == -1)
+        
+        self.get_logger().info(f"Map stats - Total: {total_cells}, Free: {free_cells}, Occupied: {occupied_cells}, Unknown: {unknown_cells}")
         self.get_logger().info("Map inflation complete.")
 
     def goal_callback(self, msg: PoseStamped):
         self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
+        
+        # Reset replanning attempts for new goal
+        self.replanning_attempts = 0
         
         # Ensure goal is in the map_tf_frame
         if msg.header.frame_id != self.map_tf_frame:
@@ -173,31 +381,49 @@ class PlanningNode(Node):
         if self.inflated_map_storage is None: return True # Assume occupied if no map
         height, width = self.inflated_map_storage.shape
         if 0 <= grid_y < height and 0 <= grid_x < width:
-            # For inflated_map_storage: 100 means occupied/inflated
-            return self.inflated_map_storage[grid_y, grid_x] >= 90 # Threshold for occupied
+            # For inflated_map_storage: 100 means occupied/inflated, -1 means unknown
+            cell_value = self.inflated_map_storage[grid_y, grid_x]
+            return cell_value >= 90 or cell_value == -1 # Treat unknown as occupied for safety
         return True # Out of bounds
 
     def get_a_star_heuristic(self, pos_a, pos_b): # pos are (x,y) tuples
         return np.hypot(pos_a[0] - pos_b[0], pos_a[1] - pos_b[1]) # Euclidean distance
 
-    def find_nearest_free_grid_cell(self, goal_grid_xy, max_radius_cells=20):
+    def find_nearest_free_grid_cell(self, goal_grid_xy, max_radius_cells=30):
         if goal_grid_xy[0] is None: return None
         gx, gy = goal_grid_xy
         if not self.is_grid_cell_occupied(gx, gy): return gx, gy # Goal is already free
 
+        self.get_logger().info(f"Searching for free cell near ({gx}, {gy}) with max radius {max_radius_cells}")
+        
         for r in range(1, max_radius_cells + 1):
+            candidates = []
+            # Check all cells in the current radius
             for dx_offset in range(-r, r + 1):
-                for dy_offset in [-r, r]: # Check horizontal segments of square
-                    check_x, check_y = gx + dx_offset, gy + dy_offset
-                    if not self.is_grid_cell_occupied(check_x, check_y): return check_x, check_y
-            for dy_offset in range(-r + 1, r): # Check vertical segments (excluding corners already checked)
-                 for dx_offset in [-r, r]:
-                    check_x, check_y = gx + dx_offset, gy + dy_offset
-                    if not self.is_grid_cell_occupied(check_x, check_y): return check_x, check_y
+                for dy_offset in range(-r, r + 1):
+                    # Only check cells on the perimeter of the current radius
+                    if abs(dx_offset) == r or abs(dy_offset) == r:
+                        check_x, check_y = gx + dx_offset, gy + dy_offset
+                        if not self.is_grid_cell_occupied(check_x, check_y):
+                            candidates.append((check_x, check_y))
+            
+            if candidates:
+                # Return the first free cell found at this radius
+                self.get_logger().info(f"Found {len(candidates)} free cells at radius {r}, using ({candidates[0][0]}, {candidates[0][1]})")
+                return candidates[0]
+        
+        self.get_logger().warn(f"No free cell found within {max_radius_cells} cells of goal")
         return None
 
     def a_star_planner(self, start_grid_xy, goal_grid_xy):
         if start_grid_xy[0] is None or goal_grid_xy[0] is None: return None
+        
+        # Debug: Check if start position is valid
+        if self.is_grid_cell_occupied(start_grid_xy[0], start_grid_xy[1]):
+            self.get_logger().error(f"Start position {start_grid_xy} is occupied! Cannot plan.")
+            return None
+            
+        self.get_logger().info(f"A* planning from {start_grid_xy} to {goal_grid_xy}")
             
         open_set = [] # Priority queue: (f_score, grid_xy_tuple)
         heapq.heappush(open_set, (0, start_grid_xy))
@@ -207,9 +433,13 @@ class PlanningNode(Node):
         
         # f_score = g_score + heuristic. Initialize f_score for start node.
         f_score = {start_grid_xy: self.get_a_star_heuristic(start_grid_xy, goal_grid_xy)}
+        
+        nodes_explored = 0
+        max_nodes = 10000  # Prevent infinite search
 
-        while open_set:
+        while open_set and nodes_explored < max_nodes:
             current_f, current_grid_xy = heapq.heappop(open_set)
+            nodes_explored += 1
 
             if current_grid_xy == goal_grid_xy:
                 # Reconstruct path
@@ -219,6 +449,7 @@ class PlanningNode(Node):
                     path_reconstructed.append(temp_xy)
                     temp_xy = came_from[temp_xy]
                 path_reconstructed.append(start_grid_xy)
+                self.get_logger().info(f"A* found path with {len(path_reconstructed)} waypoints after exploring {nodes_explored} nodes")
                 return list(reversed(path_reconstructed))
 
             # Explore neighbors (8-connectivity)
@@ -239,7 +470,12 @@ class PlanningNode(Node):
                     f_val = tentative_g_val + self.get_a_star_heuristic(neighbor_grid_xy, goal_grid_xy)
                     heapq.heappush(open_set, (f_val, neighbor_grid_xy))
         
-        self.get_logger().warn("A* planner could not find a path to the goal.")
+        self.get_logger().warn(f"A* planner could not find a path to the goal after exploring {nodes_explored} nodes.")
+        
+        # Debug: Check connectivity around start and goal
+        self.debug_connectivity(start_grid_xy, "start")
+        self.debug_connectivity(goal_grid_xy, "goal")
+        
         return None
 
     def smooth_path(self, path, min_distance=0.5):
@@ -267,6 +503,25 @@ class PlanningNode(Node):
             
         self.get_logger().info(f"Path smoothed from {len(path)} to {len(smoothed)} waypoints")
         return smoothed
+
+    def debug_connectivity(self, grid_xy, label):
+        """Debug helper to check connectivity around a point"""
+        if grid_xy[0] is None:
+            return
+            
+        gx, gy = grid_xy
+        free_neighbors = 0
+        occupied_neighbors = 0
+        
+        for dx in range(-2, 3):
+            for dy in range(-2, 3):
+                check_x, check_y = gx + dx, gy + dy
+                if self.is_grid_cell_occupied(check_x, check_y):
+                    occupied_neighbors += 1
+                else:
+                    free_neighbors += 1
+        
+        self.get_logger().info(f"{label} connectivity at ({gx}, {gy}): {free_neighbors} free, {occupied_neighbors} occupied in 5x5 area")
 
     def get_lookahead_point(self, robot_x, robot_y, lookahead_dist):
         """
@@ -367,6 +622,11 @@ class PlanningNode(Node):
             self.get_logger().warn("Failed to convert world start/goal to map grid coordinates.")
             self.current_path = []
             return
+        
+        # Debug: Log grid positions and check if they're valid
+        self.get_logger().info(f"Start grid: {start_grid_xy}, Goal grid: {goal_grid_xy}")
+        self.get_logger().info(f"Start occupied: {self.is_grid_cell_occupied(start_grid_xy[0], start_grid_xy[1])}")
+        self.get_logger().info(f"Original goal occupied: {self.is_grid_cell_occupied(goal_grid_xy[0], goal_grid_xy[1])}")
             
         if self.is_grid_cell_occupied(goal_grid_xy[0], goal_grid_xy[1]):
             self.get_logger().warn(f"Goal grid cell {goal_grid_xy} is occupied. Finding nearest free cell.")
@@ -377,6 +637,17 @@ class PlanningNode(Node):
                 return
             self.get_logger().info(f"Using new free goal grid cell: {effective_goal_grid_xy}")
             goal_grid_xy = effective_goal_grid_xy # Update goal to the new free cell
+        
+        # Check if start position is blocked (robot might be in obstacle due to map updates)
+        if self.is_grid_cell_occupied(start_grid_xy[0], start_grid_xy[1]):
+            self.get_logger().warn("Robot appears to be in an occupied cell. Searching for nearby free space.")
+            free_start = self.find_nearest_free_grid_cell(start_grid_xy, max_radius_cells=10)
+            if free_start is None:
+                self.get_logger().error("Cannot find free space near robot position. Planning aborted.")
+                self.current_path = []
+                return
+            self.get_logger().info(f"Using alternative start position: {free_start}")
+            start_grid_xy = free_start
 
         self.get_logger().info(f"Planning path from grid {start_grid_xy} to grid {goal_grid_xy}")
         grid_path = self.a_star_planner(start_grid_xy, goal_grid_xy)
@@ -428,13 +699,26 @@ class PlanningNode(Node):
             marker.pose.position.z = 0.1  # Slightly above the ground
             marker.pose.orientation.w = 1.0 # Default orientation
             marker.scale.x = 0.1; marker.scale.y = 0.1; marker.scale.z = 0.1;
-            marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.8) # Green, slightly transparent
+            
+            # Color based on obstacle avoidance state
+            if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
+                marker.color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.8) # Orange during avoidance
+            else:
+                marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.8) # Green normal
+                
             marker.lifetime = rclpy.duration.Duration(seconds=60).to_msg() # Auto-delete after 60s
             marker_array.markers.append(marker)
         
         self.marker_pub.publish(marker_array)
 
     def path_following_update(self): # Renamed from update
+        # Priority 1: Handle obstacle avoidance if active
+        if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
+            cmd = self.execute_obstacle_avoidance()
+            self.cmd_pub.publish(cmd)
+            return
+
+        # Priority 2: Normal path following
         if not self.current_path:
             return
 
