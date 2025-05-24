@@ -18,24 +18,36 @@ class GoldenCubeDetectorNode(Node):
         # Parameters
         self.declare_parameter(
             name="image_sub_topic",
-            value="/T7/oakd/rgb/image_raw/compressed",
+            value="/T6/oakd/rgb/image_raw/compressed",
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
             ),
         )
         
         # Default parametres
-        self.declare_parameter("hue_min", 20)
-        self.declare_parameter("hue_max", 40)
-        self.declare_parameter("sat_min", 100)
-        self.declare_parameter("sat_max", 255)
-        self.declare_parameter("val_min", 100)
+        self.declare_parameter("hue_min", 0)
+        self.declare_parameter("hue_max", 18)
+        self.declare_parameter("sat_min", 102)
+        self.declare_parameter("sat_max", 200)
+        self.declare_parameter("val_min", 101)
         self.declare_parameter("val_max", 255)
         
         # Stability parameters
         self.declare_parameter("confidence_threshold", 0.6)
         self.declare_parameter("smoothing_window", 5)
         self.declare_parameter("min_detection_area", 500)
+        
+        # New parameters for cube validation
+        self.declare_parameter("edge_threshold", 50)  # Canny edge detection threshold
+        self.declare_parameter("min_edge_ratio", 0.15)  # Minimum ratio of edge pixels to total area
+        self.declare_parameter("max_edge_ratio", 0.6)   # Maximum ratio (too many edges = noise)
+        self.declare_parameter("perimeter_check_thickness", 10)  # How thick the perimeter band to check
+        self.declare_parameter("min_perimeter_edge_ratio", 0.3)  # Min edge ratio in perimeter
+        
+        # Color difference validation parameters
+        self.declare_parameter("color_diff_threshold", 30)  # Minimum color difference (HSV)
+        self.declare_parameter("min_different_sides", 3)  # Minimum sides that must have different colors
+        self.declare_parameter("side_sample_ratio", 0.3)  # Ratio of each side to sample for color
         
         # Get parameters
         image_sub_topic = self.get_parameter("image_sub_topic").get_parameter_value().string_value
@@ -46,15 +58,27 @@ class GoldenCubeDetectorNode(Node):
         self.val_min = self.get_parameter("val_min").get_parameter_value().integer_value
         self.val_max = self.get_parameter("val_max").get_parameter_value().integer_value
         
-        # self.confidence_threshold = 0.30
         self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
         self.smoothing_window_size = self.get_parameter("smoothing_window").get_parameter_value().integer_value
         self.min_detection_area = self.get_parameter("min_detection_area").get_parameter_value().integer_value
         
+        # New cube validation parameters
+        self.edge_threshold = self.get_parameter("edge_threshold").get_parameter_value().integer_value
+        self.min_edge_ratio = self.get_parameter("min_edge_ratio").get_parameter_value().double_value
+        self.max_edge_ratio = self.get_parameter("max_edge_ratio").get_parameter_value().double_value
+        self.perimeter_check_thickness = self.get_parameter("perimeter_check_thickness").get_parameter_value().integer_value
+        self.min_perimeter_edge_ratio = self.get_parameter("min_perimeter_edge_ratio").get_parameter_value().double_value
+        
+        # Color difference validation parameters
+        self.color_diff_threshold = self.get_parameter("color_diff_threshold").get_parameter_value().integer_value
+        self.min_different_sides = self.get_parameter("min_different_sides").get_parameter_value().integer_value
+        self.side_sample_ratio = self.get_parameter("side_sample_ratio").get_parameter_value().double_value
+        
         self.get_logger().info(f"{image_sub_topic=}")
         self.get_logger().info(f"HSV thresholds: H({self.hue_min}-{self.hue_max}), S({self.sat_min}-{self.sat_max}), V({self.val_min}-{self.val_max})")
         self.get_logger().info(f"Confidence threshold: {self.confidence_threshold}")
-        self.get_logger().info(f"Smoothing window size: {self.smoothing_window_size}")
+        self.get_logger().info(f"Edge detection parameters: threshold={self.edge_threshold}, ratio=({self.min_edge_ratio}-{self.max_edge_ratio})")
+        self.get_logger().info(f"Color validation: diff_threshold={self.color_diff_threshold}, min_sides={self.min_different_sides}")
         
         # Create subscribers
         self.image_sub = Subscriber(
@@ -69,7 +93,7 @@ class GoldenCubeDetectorNode(Node):
         
         # Register callback
         self.image_sub.registerCallback(self.image_callback)
-        self.get_logger().info("Golden Cube Detector Node initialized and waiting for images...")
+        self.get_logger().info("Enhanced Golden Cube Detector Node initialized and waiting for images...")
         
         # For tracking processing performance
         self.frame_count = 0
@@ -95,17 +119,49 @@ class GoldenCubeDetectorNode(Node):
             # Convert compressed image to OpenCV format
             image = self.cv_bridge.compressed_imgmsg_to_cv2(image_msg)
             
+            # Validate image
+            if image is None:
+                self.get_logger().error("Received None image from cv_bridge")
+                return
+                
+            if len(image.shape) != 3:
+                self.get_logger().error(f"Invalid image shape: {image.shape}")
+                return
+            
             # Create a copy for visualization
             display_image = image.copy()
             
             # Process the image to detect golden cubes
-            detection_result = self.detect_golden_cube(image, display_image)
-            raw_detection, cube_center, cube_size, raw_confidence = detection_result
+            try:
+                detection_result = self.detect_golden_cube(image, display_image)
+                if detection_result is None or len(detection_result) != 4:
+                    self.get_logger().error("detect_golden_cube returned invalid result")
+                    return
+                    
+                raw_detection, cube_center, cube_size, raw_confidence = detection_result
+                
+                # Validate detection result values
+                if raw_detection is None:
+                    raw_detection = False
+                if cube_center is None:
+                    cube_center = (0, 0)
+                if cube_size is None:
+                    cube_size = 0
+                if raw_confidence is None:
+                    raw_confidence = 0.0
+                    
+            except Exception as e:
+                self.get_logger().error(f"Error in detect_golden_cube: {str(e)}")
+                return
             
             # Apply temporal smoothing for stability
-            stable_detection, stable_center, stable_size, stable_confidence = self.stabilize_detection(
-                raw_detection, cube_center, cube_size, raw_confidence
-            )
+            try:
+                stable_detection, stable_center, stable_size, stable_confidence = self.stabilize_detection(
+                    raw_detection, cube_center, cube_size, raw_confidence
+                )
+            except Exception as e:
+                self.get_logger().error(f"Error in stabilize_detection: {str(e)}")
+                return
             
             # Publish results if a cube is detected
             if stable_detection:
@@ -139,6 +195,8 @@ class GoldenCubeDetectorNode(Node):
             
         except Exception as e:
             self.get_logger().error(f"Error processing image: {str(e)}")
+            import traceback
+            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
     
     def stabilize_detection(self, detection, center, size, confidence):
         """Apply temporal smoothing to detection results for stability"""
@@ -182,9 +240,284 @@ class GoldenCubeDetectorNode(Node):
         
         return True, (stable_center_x, stable_center_y), stable_size, stable_confidence
     
+    def validate_cube_shape(self, image, contour, mask):
+        """
+        Validate if the detected golden region is actually a cube by checking for:
+        1. Different colored pixels around the perimeter (indicating complete cube edges)
+        2. Proper edge structure around the perimeter
+        3. Reasonable edge density within the region
+        4. Shape characteristics that indicate a 3D cube rather than flat surface
+        """
+        try:
+            # Get bounding rectangle
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Validate bounding rectangle
+            if x < 0 or y < 0 or w <= 0 or h <= 0:
+                return False, 0.0, "Invalid bounding rectangle"
+            
+            if y + h > image.shape[0] or x + w > image.shape[1]:
+                return False, 0.0, "Bounding rectangle exceeds image bounds"
+            
+            # Create ROI (Region of Interest)
+            roi_color = image[y:y+h, x:x+w]
+            roi_gray = cv2.cvtColor(roi_color, cv2.COLOR_BGR2GRAY)
+            roi_mask = mask[y:y+h, x:x+w]
+            roi_hsv = cv2.cvtColor(roi_color, cv2.COLOR_BGR2HSV)
+            
+            # Validate ROI
+            if roi_color is None or roi_hsv is None or roi_mask is None:
+                return False, 0.0, "Failed to create ROI"
+            
+            if roi_color.size == 0 or roi_hsv.size == 0 or roi_mask.size == 0:
+                return False, 0.0, "Empty ROI"
+            
+            # 1. NEW: Check for color differences around perimeter (your main requirement)
+            try:
+                color_validation_score, different_sides_count = self.check_perimeter_color_differences(
+                    roi_hsv, roi_mask
+                )
+            except Exception as e:
+                self.get_logger().error(f"Error in check_perimeter_color_differences: {str(e)}")
+                color_validation_score, different_sides_count = 0.0, 0
+            
+            # Apply Canny edge detection to the ROI
+            edges = cv2.Canny(roi_gray, self.edge_threshold, self.edge_threshold * 2)
+            
+            # Show edge detection result for debugging
+            edge_display = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+            cv2.imshow("Edge Detection", edge_display)
+            
+            # 2. Check edge density within the golden region
+            golden_pixels = np.sum(roi_mask > 0)
+            if golden_pixels == 0:
+                return False, 0.0, "No golden pixels"
+            
+            # Count edges within the golden region
+            edges_in_golden = cv2.bitwise_and(edges, roi_mask)
+            edge_pixels_in_golden = np.sum(edges_in_golden > 0)
+            edge_ratio_in_golden = edge_pixels_in_golden / golden_pixels
+            
+            # 3. Check perimeter edges (to detect cube boundaries)
+            try:
+                perimeter_score = self.check_perimeter_edges(roi_gray, roi_mask)
+            except Exception as e:
+                self.get_logger().error(f"Error in check_perimeter_edges: {str(e)}")
+                perimeter_score = 0.0
+            
+            # 4. Check for corner detection (cubes should have distinct corners)
+            try:
+                corner_score = self.detect_cube_corners(roi_gray, roi_mask)
+            except Exception as e:
+                self.get_logger().error(f"Error in detect_cube_corners: {str(e)}")
+                corner_score = 0.0
+            
+            # 5. Check size constraints (cubes shouldn't be too large relative to image)
+            image_area = image.shape[0] * image.shape[1]
+            object_area = w * h
+            size_ratio = object_area / image_area
+            
+            # Size score: penalize objects that take up too much of the frame
+            if size_ratio > 0.5:  # If object takes up more than 50% of frame
+                size_score = max(0, 1.0 - (size_ratio - 0.5) * 2)  # Penalty for large objects
+            else:
+                size_score = 1.0
+            
+            # Combine all validation scores with heavy weight on color validation
+            edge_score = 1.0 if (self.min_edge_ratio <= edge_ratio_in_golden <= self.max_edge_ratio) else 0.0
+            
+            # Overall cube validation score - color validation gets highest weight
+            cube_confidence = (0.5 * color_validation_score + 0.2 * perimeter_score + 
+                              0.1 * corner_score + 0.1 * size_score + 0.1 * edge_score)
+            
+            # Debug information
+            reason = f"Color:{different_sides_count}/{self.min_different_sides} sides, Score:{color_validation_score:.2f}"
+            
+            # Return validation result - require color validation to pass
+            is_valid_cube = (cube_confidence > 0.5 and 
+                            different_sides_count >= self.min_different_sides)
+            
+            return is_valid_cube, cube_confidence, reason
+            
+        except Exception as e:
+            self.get_logger().error(f"Error in validate_cube_shape: {str(e)}")
+            return False, 0.0, f"Validation error: {str(e)}"
+    
+    def check_perimeter_color_differences(self, roi_hsv, roi_mask):
+        """
+        Check if the perimeter of the golden object has different colors compared to the object itself.
+        This indicates we can see complete cube edges rather than just part of a large surface.
+        Returns: (validation_score, number_of_different_sides)
+        """
+        h, w = roi_mask.shape
+        
+        # Get the average color of the golden object itself
+        golden_pixels = roi_hsv[roi_mask > 0]
+        if len(golden_pixels) == 0:
+            return 0.0, 0
+        
+        avg_golden_color = np.mean(golden_pixels, axis=0)
+        
+        # Ensure we have valid color values
+        if avg_golden_color is None or len(avg_golden_color) != 3:
+            return 0.0, 0
+        
+        # Define the four sides of the bounding rectangle
+        sides = {
+            'top': (0, int(h * self.side_sample_ratio)),           # Top portion
+            'bottom': (int(h * (1 - self.side_sample_ratio)), h), # Bottom portion  
+            'left': (0, int(w * self.side_sample_ratio)),          # Left portion
+            'right': (int(w * (1 - self.side_sample_ratio)), w)   # Right portion
+        }
+        
+        different_sides = 0
+        side_differences = {}
+        
+        # Create visualization image for debugging
+        debug_image = cv2.cvtColor(roi_mask, cv2.COLOR_GRAY2BGR)
+        
+        for side_name, (start, end) in sides.items():
+            if side_name in ['top', 'bottom']:
+                # For top/bottom sides, sample the perimeter region
+                if side_name == 'top':
+                    perimeter_region = roi_hsv[start:end, :]
+                    mask_region = roi_mask[start:end, :]
+                else:
+                    perimeter_region = roi_hsv[start:end, :]
+                    mask_region = roi_mask[start:end, :]
+            else:
+                # For left/right sides, sample the perimeter region
+                if side_name == 'left':
+                    perimeter_region = roi_hsv[:, start:end]
+                    mask_region = roi_mask[:, start:end]
+                else:
+                    perimeter_region = roi_hsv[:, start:end]
+                    mask_region = roi_mask[:, start:end]
+            
+            # Get pixels that are NOT part of the golden object (background pixels)
+            background_pixels = perimeter_region[mask_region == 0]
+            
+            if len(background_pixels) > 10:  # Need sufficient background pixels for reliable average
+                # Calculate average background color for this side
+                avg_background_color = np.mean(background_pixels, axis=0)
+                
+                # Ensure we have valid background color
+                if avg_background_color is not None and len(avg_background_color) == 3:
+                    # Calculate color difference in HSV space
+                    color_diff = self.calculate_hsv_difference(avg_golden_color, avg_background_color)
+                    side_differences[side_name] = color_diff
+                    
+                    # Check if the difference is significant enough
+                    if color_diff > self.color_diff_threshold:
+                        different_sides += 1
+                        
+                        # Mark this side as different in debug image
+                        if side_name == 'top':
+                            cv2.rectangle(debug_image, (0, start), (w-1, end-1), (0, 255, 0), 2)
+                        elif side_name == 'bottom':
+                            cv2.rectangle(debug_image, (0, start), (w-1, end-1), (0, 255, 0), 2)
+                        elif side_name == 'left':
+                            cv2.rectangle(debug_image, (start, 0), (end-1, h-1), (0, 255, 0), 2)
+                        else:  # right
+                            cv2.rectangle(debug_image, (start, 0), (end-1, h-1), (0, 255, 0), 2)
+                    else:
+                        # Mark this side as similar in debug image
+                        if side_name == 'top':
+                            cv2.rectangle(debug_image, (0, start), (w-1, end-1), (0, 0, 255), 2)
+                        elif side_name == 'bottom':
+                            cv2.rectangle(debug_image, (0, start), (w-1, end-1), (0, 0, 255), 2)
+                        elif side_name == 'left':
+                            cv2.rectangle(debug_image, (start, 0), (end-1, h-1), (0, 0, 255), 2)
+                        else:  # right
+                            cv2.rectangle(debug_image, (start, 0), (end-1, h-1), (0, 0, 255), 2)
+                else:
+                    side_differences[side_name] = 0
+            else:
+                side_differences[side_name] = 0
+        
+        # Show debug visualization
+        cv2.imshow("Color Difference Analysis", debug_image)
+        
+        # Calculate validation score based on how many sides have different colors
+        if different_sides >= self.min_different_sides:
+            validation_score = min(1.0, different_sides / 4.0)  # Perfect score if all 4 sides different
+        else:
+            validation_score = different_sides / self.min_different_sides
+        
+        return validation_score, different_sides
+    
+    def calculate_hsv_difference(self, color1, color2):
+        """
+        Calculate the difference between two HSV colors.
+        Takes into account the circular nature of hue.
+        """
+        # Hue difference (circular)
+        h_diff = min(abs(color1[0] - color2[0]), 180 - abs(color1[0] - color2[0]))
+        
+        # Saturation and Value differences (linear)
+        s_diff = abs(color1[1] - color2[1])
+        v_diff = abs(color1[2] - color2[2])
+        
+        # Combined difference with different weights
+        # Hue is most important for distinguishing colors
+        total_diff = 2.0 * h_diff + 1.0 * s_diff + 1.0 * v_diff
+        
+        return total_diff
+    def check_perimeter_edges(self, roi_gray, roi_mask):
+        """Check for edges around the perimeter of the golden region"""
+        h, w = roi_mask.shape
+        
+        # Create a perimeter band around the golden region
+        kernel = np.ones((self.perimeter_check_thickness, self.perimeter_check_thickness), np.uint8)
+        dilated_mask = cv2.dilate(roi_mask, kernel, iterations=1)
+        perimeter_band = dilated_mask - roi_mask
+        
+        if np.sum(perimeter_band) == 0:
+            return 0.0
+        
+        # Apply edge detection
+        edges = cv2.Canny(roi_gray, self.edge_threshold, self.edge_threshold * 2)
+        
+        # Count edges in the perimeter band
+        edges_in_perimeter = cv2.bitwise_and(edges, perimeter_band)
+        edge_pixels_in_perimeter = np.sum(edges_in_perimeter > 0)
+        perimeter_pixels = np.sum(perimeter_band > 0)
+        
+        perimeter_edge_ratio = edge_pixels_in_perimeter / perimeter_pixels if perimeter_pixels > 0 else 0
+        
+        # Score based on perimeter edge ratio
+        if perimeter_edge_ratio >= self.min_perimeter_edge_ratio:
+            return min(1.0, perimeter_edge_ratio / self.min_perimeter_edge_ratio)
+        else:
+            return perimeter_edge_ratio / self.min_perimeter_edge_ratio
+    
+    def detect_cube_corners(self, roi_gray, roi_mask):
+        """Detect corners that would indicate a cube structure"""
+        # Use Harris corner detection
+        corners = cv2.cornerHarris(roi_gray, 2, 3, 0.04)
+        corners = cv2.dilate(corners, None)
+        
+        # Threshold for corner detection
+        corner_threshold = 0.01 * corners.max() if corners.max() > 0 else 0
+        corner_pixels = corners > corner_threshold
+        
+        # Count corners within the golden region
+        corners_in_golden = cv2.bitwise_and(corner_pixels.astype(np.uint8) * 255, roi_mask)
+        num_corners = np.sum(corners_in_golden > 0)
+        
+        # Score based on number of corners (expect 4 corners for a cube face, but allow some tolerance)
+        if 3 <= num_corners <= 6:  # Reasonable range for cube corners
+            return 1.0
+        elif 2 <= num_corners <= 8:  # Acceptable range
+            return 0.7
+        elif num_corners > 0:
+            return 0.3
+        else:
+            return 0.0
+    
     def detect_golden_cube(self, image, display_image):
         """
-        Process the image to detect golden cubes
+        Process the image to detect golden cubes with enhanced validation
         Returns: (detection_flag, center_point, size, confidence)
         """
         # Convert to HSV for better color filtering
@@ -218,6 +551,10 @@ class GoldenCubeDetectorNode(Node):
             largest_contour = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(largest_contour)
             
+            # Validate area
+            if area is None or area <= 0:
+                return cube_detected, cube_center, cube_size, confidence
+            
             # Only process if the contour is large enough (to filter out noise)
             if area > self.min_detection_area:
                 # Get rotated rectangle for better orientation handling
@@ -243,6 +580,15 @@ class GoldenCubeDetectorNode(Node):
                 epsilon = 0.04 * cv2.arcLength(largest_contour, True)
                 approx = cv2.approxPolyDP(largest_contour, epsilon, True)
                 
+                # ENHANCED: Validate if this is actually a cube using edge detection
+                try:
+                    is_valid_cube, cube_validation_score, validation_reason = self.validate_cube_shape(
+                        image, largest_contour, mask
+                    )
+                except Exception as e:
+                    self.get_logger().error(f"Error in validate_cube_shape: {str(e)}")
+                    is_valid_cube, cube_validation_score, validation_reason = False, 0.0, "Validation failed"
+                
                 # Calculate confidence based on multiple factors
                 # 1. Aspect ratio (closer to 1 is better)
                 ar_confidence = 1.0 - min(abs(1.0 - aspect_ratio), 1.0)
@@ -254,8 +600,12 @@ class GoldenCubeDetectorNode(Node):
                 # 3. Solidity (higher is better, indicates how "solid" or filled the shape is)
                 solidity_confidence = min(1.0, solidity * 1.25)  # Scale to give more weight
                 
-                # Combined confidence
-                confidence = (0.4 * ar_confidence + 0.4 * shape_confidence + 0.2 * solidity_confidence)
+                # 4. NEW: Cube validation score from edge analysis
+                cube_structure_confidence = cube_validation_score
+                
+                # Combined confidence with cube validation having significant weight
+                confidence = (0.25 * ar_confidence + 0.25 * shape_confidence + 
+                             0.15 * solidity_confidence + 0.35 * cube_structure_confidence)
                 
                 # Calculate size consistently (average of width and height)
                 cube_size = (width + height) / 2
@@ -263,28 +613,29 @@ class GoldenCubeDetectorNode(Node):
                 # Store detection info
                 cube_center = (center_x, center_y)
                 
-                # If confidence is high enough, consider it a cube
-                if confidence > self.confidence_threshold:
+                # If confidence is high enough AND cube validation passes, consider it a cube
+                if confidence > self.confidence_threshold and is_valid_cube:
                     cube_detected = True
                     
                     # Draw raw detection results on the display image (in green)
                     cv2.drawContours(display_image, [box], 0, (0, 255, 0), 2)
                     cv2.circle(display_image, (int(center_x), int(center_y)), 5, (0, 255, 0), -1)
-                    cv2.putText(display_image, f"Raw: {confidence:.2f}", (x, y - 10),
+                    cv2.putText(display_image, f"CUBE: {confidence:.2f}", (x, y - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     
                     # Debug information
                     cv2.putText(display_image, f"AR: {aspect_ratio:.2f}", (x, y + h + 15),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                    cv2.putText(display_image, f"Corners: {len(approx)}", (x, y + h + 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                    cv2.putText(display_image, f"Solidity: {solidity:.2f}", (x, y + h + 45),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    cv2.putText(display_image, f"Validation: {validation_reason}", (x, y + h + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                 else:
-                    # Draw rejected contour
+                    # Draw rejected contour with reason
                     cv2.drawContours(display_image, [box], 0, (0, 165, 255), 2)
-                    cv2.putText(display_image, f"Rejected: {confidence:.2f}", (x, y - 10),
+                    rejection_reason = "Low conf" if confidence <= self.confidence_threshold else "Not cube"
+                    cv2.putText(display_image, f"{rejection_reason}: {confidence:.2f}", (x, y - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                    cv2.putText(display_image, f"Val: {validation_reason}", (x, y + h + 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 165, 255), 1)
         
         return cube_detected, cube_center, cube_size, confidence
 
@@ -302,4 +653,4 @@ def main(args=None):
         rclpy.shutdown()
 
 if __name__ == "__main__":
-    main()  
+    main()

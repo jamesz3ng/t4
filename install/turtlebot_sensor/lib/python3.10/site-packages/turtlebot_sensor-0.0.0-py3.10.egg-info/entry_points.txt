@@ -2,4 +2,5 @@
 explorer = turtlebot_sensor.explorer:main
 plan_node = turtlebot_sensor.plan_node:main
 sync_node = turtlebot_sensor.sync_node:main
+value_test = turtlebot_sensor.hsv_tuner:main
 

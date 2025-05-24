@@ -11,7 +11,7 @@ class HSVTuner(Node):
         super().__init__('hsv_tuner')
         
         # ROS topic to subscribe to
-        self.image_topic = "/T7/oakd/rgb/image_raw/compressed"
+        self.image_topic = "/T26/oakd/rgb/image_raw/compressed"
         self.get_logger().info(f"Subscribing to topic: {self.image_topic}")
         
         # Create subscriber
