@@ -86,7 +86,8 @@ class PlanningNode(Node):
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic_actual, 10)
         self.marker_pub = self.create_publisher(MarkerArray, self.waypoints_topic_actual, 10)
 
-        self.path_execution_timer = self.create_timer(0.1, self.path_following_update) # Renamed timer
+        # IMPROVED: Reduce timer frequency to reduce jitter
+        self.path_execution_timer = self.create_timer(0.2, self.path_following_update) # Changed from 0.1 to 0.2
 
     def quaternion_to_yaw(self, q_geometry_msg): # Parameter is geometry_msgs.msg.Quaternion
         # Standard conversion from quaternion to yaw (around Z)
@@ -114,9 +115,7 @@ class PlanningNode(Node):
         # For scipy.ndimage.maximum_filter, 'size' is more like diameter or width of kernel
         # A disk of radius R cells has a bounding box of roughly (2R+1)x(2R+1)
         # Let's use a fixed cell size for inflation for now, e.g., 5 cells around obstacle
-        inflation_kernel_size = 11 # Must be odd for symmetric filter around center; (2*radius_cells + 1)
-                                   # size=18 from your original code is a large inflation.
-                                   # Let's try a slightly smaller one, adjust as needed.
+        inflation_kernel_size = 15 # Must be odd for symmetric filter around center; (2*radius_cells + 1)
 
         self.get_logger().info(f"Inflating map with kernel size: {inflation_kernel_size}")
         # maximum_filter expands occupied regions.
@@ -129,7 +128,6 @@ class PlanningNode(Node):
         self.inflated_map_storage[inflated_regions_mask > 0] = 100 # Mark inflated areas as occupied
         
         self.get_logger().info("Map inflation complete.")
-
 
     def goal_callback(self, msg: PoseStamped):
         self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
@@ -198,7 +196,6 @@ class PlanningNode(Node):
                     if not self.is_grid_cell_occupied(check_x, check_y): return check_x, check_y
         return None
 
-
     def a_star_planner(self, start_grid_xy, goal_grid_xy):
         if start_grid_xy[0] is None or goal_grid_xy[0] is None: return None
             
@@ -245,6 +242,89 @@ class PlanningNode(Node):
         self.get_logger().warn("A* planner could not find a path to the goal.")
         return None
 
+    def smooth_path(self, path, min_distance=0.5):
+        """
+        Remove waypoints that are too close together to reduce jitter
+        """
+        if not path or len(path) < 2:
+            return path
+            
+        smoothed = [path[0]]  # Always keep first waypoint
+        
+        for i in range(1, len(path)):
+            current = path[i]
+            last_kept = smoothed[-1]
+            
+            distance = np.hypot(current[0] - last_kept[0], current[1] - last_kept[1])
+            
+            # Only keep waypoint if it's far enough from the last kept waypoint
+            if distance >= min_distance:
+                smoothed.append(current)
+        
+        # Always keep the final waypoint (goal)
+        if len(smoothed) > 1 and smoothed[-1] != path[-1]:
+            smoothed.append(path[-1])
+            
+        self.get_logger().info(f"Path smoothed from {len(path)} to {len(smoothed)} waypoints")
+        return smoothed
+
+    def get_lookahead_point(self, robot_x, robot_y, lookahead_dist):
+        """
+        Get a point ahead on the path for smoother following
+        """
+        if not self.current_path:
+            return robot_x, robot_y
+            
+        # Find the closest point on path
+        min_dist = float('inf')
+        closest_idx = 0
+        
+        for i, (wx, wy) in enumerate(self.current_path):
+            dist = np.hypot(wx - robot_x, wy - robot_y)
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = i
+        
+        # Look ahead from closest point
+        accumulated_dist = 0.0
+        
+        for i in range(closest_idx, len(self.current_path)):
+            if i == len(self.current_path) - 1:
+                # Return final waypoint
+                return self.current_path[i]
+                
+            current_wp = self.current_path[i]
+            next_wp = self.current_path[i + 1]
+            
+            segment_dist = np.hypot(next_wp[0] - current_wp[0], next_wp[1] - current_wp[1])
+            
+            if accumulated_dist + segment_dist >= lookahead_dist:
+                # Interpolate along this segment
+                remaining_dist = lookahead_dist - accumulated_dist
+                ratio = remaining_dist / segment_dist
+                
+                x = current_wp[0] + ratio * (next_wp[0] - current_wp[0])
+                y = current_wp[1] + ratio * (next_wp[1] - current_wp[1])
+                return x, y
+                
+            accumulated_dist += segment_dist
+        
+        # If we get here, return the last waypoint
+        return self.current_path[-1]
+
+    def cleanup_passed_waypoints(self, robot_x, robot_y, threshold):
+        """
+        Remove waypoints that are behind the robot or very close
+        """
+        while self.current_path:
+            wp_x, wp_y = self.current_path[0]
+            dist = np.hypot(wp_x - robot_x, wp_y - robot_y)
+            
+            if dist < threshold:
+                self.current_path.pop(0)
+                self.get_logger().debug(f"Removed close waypoint. {len(self.current_path)} remaining.")
+            else:
+                break
 
     def plan_new_path(self): # Renamed from plan_path
         if self.map_data_storage is None or self.current_goal_pose is None or self.map_info_storage is None:
@@ -308,9 +388,11 @@ class PlanningNode(Node):
                 if wx is not None:
                     self.current_path.append((wx, wy))
             
+            # SMOOTH THE PATH to reduce waypoints and jitter
             if self.current_path:
+                self.current_path = self.smooth_path(self.current_path, min_distance=0.3)
                 self.publish_path_markers()
-                self.get_logger().info(f"Path planned with {len(self.current_path)} world waypoints.")
+                self.get_logger().info(f"Path planned with {len(self.current_path)} smoothed waypoints.")
             else:
                 self.get_logger().warn("A* found a grid path, but failed to convert all points to world coordinates.")
                 self.current_path = [] # Ensure path is cleared if conversion fails
@@ -354,8 +436,6 @@ class PlanningNode(Node):
 
     def path_following_update(self): # Renamed from update
         if not self.current_path:
-            # Optionally publish a zero Twist if path is empty and robot should stop
-            # self.cmd_pub.publish(Twist()) 
             return
 
         current_robot_pos_world = None
@@ -374,7 +454,6 @@ class PlanningNode(Node):
                 )
                 current_robot_pos_world = (transform_stamped.transform.translation.x, transform_stamped.transform.translation.y)
                 current_robot_yaw_world = self.quaternion_to_yaw(transform_stamped.transform.rotation)
-                # self.get_logger().debug(f"TF successful for update: '{self.map_tf_frame}' <- '{source_frame_id}'")
                 break # Success
             except Exception as e:
                 self.get_logger().debug(f"TF lookup failed for update ('{self.map_tf_frame}' <- '{source_frame_id}'): {e}", throttle_duration_sec=2.0)
@@ -386,29 +465,28 @@ class PlanningNode(Node):
 
         robot_x, robot_y = current_robot_pos_world
         
-        # Get current target waypoint
-        target_wp_x, target_wp_y = self.current_path[0]
-
+        # IMPROVED: Look ahead to multiple waypoints for smoother motion
+        lookahead_distance = 0.4  # meters
+        target_wp_x, target_wp_y = self.get_lookahead_point(robot_x, robot_y, lookahead_distance)
+        
         error_x = target_wp_x - robot_x
         error_y = target_wp_y - robot_y
         distance_to_wp = np.hypot(error_x, error_y)
         
         cmd = Twist()
-        arrival_threshold = 0.15 # meters
+        
+        # IMPROVED: More generous arrival threshold and continuous motion
+        arrival_threshold = 0.25  # Increased from 0.15
+        
+        # Remove waypoints that are behind us or very close
+        self.cleanup_passed_waypoints(robot_x, robot_y, arrival_threshold)
+        
+        if not self.current_path:
+            self.get_logger().info("Path successfully completed! Stopping.")
+            self.cmd_pub.publish(Twist()) # Publish once to stop
+            return # Path finished
 
-        if distance_to_wp < arrival_threshold:
-            self.current_path.pop(0)
-            self.get_logger().info(f"Reached waypoint. {len(self.current_path)} remaining.")
-            if not self.current_path:
-                self.get_logger().info("Path successfully completed! Stopping.")
-                self.cmd_pub.publish(Twist()) # Publish once to stop
-                return # Path finished
-            else:
-                # Moving to next waypoint, publish stop to handle transition smoothly
-                self.cmd_pub.publish(Twist())
-                return # Let next cycle pick up new target
-
-        # Proportional controller for path following
+        # IMPROVED: Smoother angular control
         angle_to_wp = math.atan2(error_y, error_x)
         heading_error = angle_to_wp - current_robot_yaw_world
 
@@ -416,29 +494,37 @@ class PlanningNode(Node):
         while heading_error > math.pi: heading_error -= 2 * math.pi
         while heading_error < -math.pi: heading_error += 2 * math.pi
 
-        # --- Control Gains (Tune these!) ---
-        k_angular = 1.0  # Proportional gain for angular velocity
-        k_linear = 0.3   # Proportional gain for linear velocity (or fixed speed if preferred)
-        max_lin_vel = 0.22 # m/s (TurtleBot 4 typical max is ~0.3)
-        max_ang_vel = 0.8  # rad/s
-        turn_in_place_threshold = math.radians(30) # If angle error > 30 deg, turn first
-
-        if abs(heading_error) > turn_in_place_threshold:
-            cmd.linear.x = 0.0 # Turn in place
-        else:
-            # Scale linear velocity by distance, but cap it
-            cmd.linear.x = min(k_linear * distance_to_wp, max_lin_vel)
-            # Reduce speed if turning sharply (optional)
-            # cmd.linear.x *= max(0.0, 1.0 - abs(heading_error) / (math.pi/2))
-
-        cmd.angular.z = k_angular * heading_error
+        # IMPROVED: More gradual control gains
+        k_angular = 0.8   # Reduced from 1.0
+        k_linear = 0.4    # Increased from 0.3
+        max_lin_vel = 0.2 # Reduced slightly for stability
+        max_ang_vel = 0.6 # Reduced from 0.8
         
+        # IMPROVED: Gradual speed reduction instead of stop-and-turn
+        turn_threshold_stop = math.radians(60)    # Was 30°
+        turn_threshold_slow = math.radians(30)    # New gradual slowdown
+        
+        if abs(heading_error) > turn_threshold_stop:
+            cmd.linear.x = 0.0  # Only stop for very large errors
+        elif abs(heading_error) > turn_threshold_slow:
+            # Gradual slowdown for medium errors
+            speed_factor = 1.0 - (abs(heading_error) - turn_threshold_slow) / (turn_threshold_stop - turn_threshold_slow)
+            cmd.linear.x = min(k_linear * distance_to_wp, max_lin_vel) * speed_factor
+        else:
+            # Normal speed for small errors
+            cmd.linear.x = min(k_linear * distance_to_wp, max_lin_vel)
+
+        # IMPROVED: Smoother angular velocity with deadband
+        if abs(heading_error) > math.radians(5):  # 5° deadband
+            cmd.angular.z = k_angular * heading_error
+        else:
+            cmd.angular.z = 0.0  # Stop micro-corrections
+
         # Clamp velocities
         cmd.linear.x = max(0.0, min(cmd.linear.x, max_lin_vel)) # Ensure non-negative and capped
         cmd.angular.z = max(-max_ang_vel, min(cmd.angular.z, max_ang_vel))
 
         self.cmd_pub.publish(cmd)
-        # self.get_logger().debug(f"DistToWP: {distance_to_wp:.2f}, HdgErr: {math.degrees(heading_error):.1f}, LinX: {cmd.linear.x:.2f}, AngZ: {cmd.angular.z:.2f}", throttle_duration_sec=0.5)
 
 def main(args=None):
     rclpy.init(args=args)

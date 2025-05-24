@@ -156,7 +156,7 @@ class FrontierExplorer(Node):
             self.get_logger().info(f"Adjusting to cube: lin_x={cmd.linear.x:.2f}, ang_z={cmd.angular.z:.2f}")
 
 
-        if self.cube_seen_counter >= 30: # Need fewer consistent sightings if alignment check is good
+        if self.cube_seen_counter >= 30: 
             if self.robot_pose is None:
                 self.get_logger().warn("Cannot determine cube global position: robot_pose is None.")
                 return
