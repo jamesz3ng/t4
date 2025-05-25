@@ -1,0 +1,71 @@
+[0.550s] Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/colcon_parallel_executor/executor/parallel.py", line 75, in execute
+    loop.run_until_complete(future)
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 636, in run_until_complete
+    self.run_forever()
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 603, in run_forever
+    self._run_once()
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 1892, in _run_once
+    ntodo = len(self._ready)
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/colcon_core/executor/__init__.py", line 91, in __call__
+    rc = await self.task(*args, **kwargs)
+  File "/usr/lib/python3/dist-packages/colcon_core/task/__init__.py", line 93, in __call__
+    return await task_method(*args, **kwargs)
+  File "/usr/lib/python3/dist-packages/colcon_ros/task/ament_python/build.py", line 102, in build
+    return await extension.build(additional_hooks=additional_hooks)
+  File "/usr/lib/python3/dist-packages/colcon_core/task/python/build.py", line 96, in build
+    available_commands = await self._get_available_commands(
+  File "/usr/lib/python3/dist-packages/colcon_core/task/python/build.py", line 194, in _get_available_commands
+    output = await check_output(
+  File "/usr/lib/python3/dist-packages/colcon_core/subprocess.py", line 129, in check_output
+    assert not rc, f'Expected {args} to pass: {stderr_data}'
+AssertionError: Expected ['/usr/bin/python3', '-W', 'ignore:setup.py install is deprecated', '-W', 'ignore:easy_install command is deprecated', 'setup.py', '--help-commands'] to pass: Traceback (most recent call last):
+  File "/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/turtlebot_sensor/setup.py", line 8, in <module>
+    setup(
+  File "/usr/lib/python3/dist-packages/setuptools/__init__.py", line 153, in setup
+    return distutils.core.setup(**attrs)
+  File "/usr/lib/python3.10/distutils/core.py", line 134, in setup
+    ok = dist.parse_command_line()
+  File "/usr/lib/python3.10/distutils/dist.py", line 480, in parse_command_line
+    if self.handle_display_options(option_order):
+  File "/usr/lib/python3/dist-packages/setuptools/dist.py", line 1126, in handle_display_options
+    return _Distribution.handle_display_options(self, option_order)
+  File "/usr/lib/python3.10/distutils/dist.py", line 683, in handle_display_options
+    self.print_commands()
+  File "/usr/lib/python3/dist-packages/setuptools/dist.py", line 904, in print_commands
+    return _Distribution.print_commands(self)
+  File "/usr/lib/python3.10/distutils/dist.py", line 752, in print_commands
+    self.print_command_list(std_commands,
+  File "/usr/lib/python3.10/distutils/dist.py", line 720, in print_command_list
+    klass = self.get_command_class(cmd)
+  File "/usr/lib/python3/dist-packages/setuptools/dist.py", line 896, in get_command_class
+    return _Distribution.get_command_class(self, command)
+  File "/usr/lib/python3.10/distutils/dist.py", line 828, in get_command_class
+    __import__(module_name)
+  File "/usr/lib/python3.10/distutils/command/check.py", line 11, in <module>
+    from docutils.parsers.rst import Parser
+  File "/usr/lib/python3/dist-packages/docutils/parsers/rst/__init__.py", line 75, in <module>
+    from docutils.parsers.rst import roles, states
+  File "/usr/lib/python3/dist-packages/docutils/parsers/rst/roles.py", line 78, in <module>
+    from docutils.utils.code_analyzer import Lexer, LexerError
+  File "/usr/lib/python3/dist-packages/docutils/utils/code_analyzer.py", line 13, in <module>
+    from pygments.lexers import get_lexer_by_name
+  File "/usr/local/lib/python3.10/dist-packages/pygments/lexers/__init__.py", line 19, in <module>
+    from pygments.plugin import find_plugin_lexers
+  File "/usr/local/lib/python3.10/dist-packages/pygments/plugin.py", line 35, in <module>
+    from importlib.metadata import entry_points
+  File "/usr/lib/python3.10/importlib/metadata/__init__.py", line 17, in <module>
+    from . import _adapters, _meta
+  File "/usr/lib/python3.10/importlib/metadata/_adapters.py", line 8, in <module>
+    class Message(email.message.Message):
+  File "/usr/lib/python3.10/importlib/metadata/_adapters.py", line 9, in Message
+    multiple_use_keys = set(
+  File "/usr/lib/python3.10/importlib/metadata/_text.py", line 80, in __hash__
+    return hash(self.lower())
+KeyboardInterrupt
+

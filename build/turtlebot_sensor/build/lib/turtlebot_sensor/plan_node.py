@@ -111,6 +111,13 @@ class PlanningNode(Node):
             self.bumper_pointcloud_callback, # New callback
             qos_sensor
         )
+
+        self.inflated_map_pub = self.create_publisher(
+            OccupancyGrid,
+            f"{self.robot_namespace}/inflated_map", # Topic name for the inflated map
+            qos_map
+        )
+
         # LaserScan for proximity detection (can complement bumper_pointcloud)
         self.scan_sub = self.create_subscription(LaserScan, self.scan_topic_actual, self.scan_callback, qos_sensor)
         
@@ -384,25 +391,48 @@ class PlanningNode(Node):
         if self.map_data_storage is None or self.map_info_storage is None:
             self.get_logger().warn("Cannot inflate map, map_data_storage or map_info_storage is None.")
             return
+        inflation_source_threshold = 50  # Cells with value 50 or more will be inflated. Tune as needed.
+                                         # Common values are 0 (everything not certainly free) to 65.
         
-        occupied_mask = (self.map_data_storage >= 90).astype(np.uint8) # Consider values >= 90 as occupied
+        # Create a binary mask: 1 if the cell should be a source for inflation, 0 otherwise.
+        source_for_inflation_mask = np.logical_or(
+            self.map_data_storage >= inflation_source_threshold,
+            self.map_data_storage == -1  # Treat unknown cells as obstacles for inflation
+        ).astype(np.uint8)
+        # --- MODIFICATION END ---
         
-        inflation_radius_meters = 0.25 # Robot radius + safety margin
+        inflation_radius_meters = 0.25  # This is your current robot radius + safety margin.
+
         if self.map_info_storage.resolution == 0:
             self.get_logger().error("Map resolution is zero, cannot calculate inflation radius in cells.")
             return
         inflation_radius_cells = math.ceil(inflation_radius_meters / self.map_info_storage.resolution)
-        inflation_kernel_size = 2 * inflation_radius_cells + 1 # Must be odd
+        
+        inflation_kernel_size = 2 * inflation_radius_cells + 1
+        if inflation_kernel_size < 1: # Should not happen if radius_cells > 0
+            inflation_kernel_size = 1
 
-        self.get_logger().info(f"Inflating map with kernel size: {inflation_kernel_size} ({inflation_radius_meters}m)")
-        inflated_regions_mask = maximum_filter(occupied_mask, size=inflation_kernel_size)
+        dilated_obstacle_mask = maximum_filter(source_for_inflation_mask, size=inflation_kernel_size)
         
         self.inflated_map_storage = self.map_data_storage.copy()
-        # Mark inflated areas as occupied (100), but don't overwrite unknown (-1) with inflated free space
-        # Only inflate known occupied cells or areas that become inflated from known occupied cells.
-        self.inflated_map_storage[inflated_regions_mask > 0] = 100 
         
-        self.get_logger().info("Map inflation complete.")
+        # Where the dilated_obstacle_mask is 1 (true), set the cell value in inflated_map_storage to 100.
+        # This ensures that all inflated regions (including original sources) are marked as definitely occupied.
+        self.inflated_map_storage[dilated_obstacle_mask == 1] = 100
+        
+        if self.inflated_map_pub.get_subscription_count() > 0 or True: 
+            try:
+                inflated_grid_msg = OccupancyGrid()
+                inflated_grid_msg.header.stamp = self.get_clock().now().to_msg()
+                inflated_grid_msg.header.frame_id = self.map_tf_frame 
+                inflated_grid_msg.info = self.map_info_storage
+                inflated_map_data_flat = self.inflated_map_storage.flatten().astype(np.int8).tolist()
+                inflated_grid_msg.data = inflated_map_data_flat
+                
+                self.inflated_map_pub.publish(inflated_grid_msg)
+                self.get_logger().debug("Published inflated map.", throttle_duration_sec=2.0)
+            except Exception as e:
+                self.get_logger().error(f"Error publishing inflated map: {e}")
 
     def goal_callback(self, msg: PoseStamped):
         self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
@@ -452,7 +482,7 @@ class PlanningNode(Node):
         height, width = self.inflated_map_storage.shape
         if 0 <= grid_y < height and 0 <= grid_x < width:
             cell_value = self.inflated_map_storage[grid_y, grid_x]
-            return cell_value >= 90 or cell_value == -1 # Treat 90-100 (occupied/inflated) and -1 (unknown) as obstacles
+            return cell_value >= 95 or cell_value == -1 # Treat 90-100 (occupied/inflated) and -1 (unknown) as obstacles
         return True # Out of bounds is occupied
 
     def get_a_star_heuristic(self, pos_a, pos_b):

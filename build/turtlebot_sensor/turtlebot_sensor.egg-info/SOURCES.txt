@@ -19,6 +19,7 @@ test/test_flake8.py
 test/test_pep257.py
 turtlebot_sensor/__init__.py
 turtlebot_sensor/explorer.py
+turtlebot_sensor/golden_cube_mission_node.py
 turtlebot_sensor/hsv_tuner.py
 turtlebot_sensor/plan_node.py
 turtlebot_sensor/sync_node.py
