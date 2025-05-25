@@ -1,6 +1,7 @@
 import cv2
-import numpy as np
 import rclpy
+import os
+import numpy as np
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
@@ -11,7 +12,8 @@ class HSVTuner(Node):
         super().__init__('hsv_tuner')
         
         # ROS topic to subscribe to
-        self.image_topic = "/T26/oakd/rgb/image_raw/compressed"
+        self.robot_id_str = os.environ.get('ROS_DOMAIN_ID')
+        self.image_topic = f"/T{self.robot_id_str}/oakd/rgb/image_raw/compressed"
         self.get_logger().info(f"Subscribing to topic: {self.image_topic}")
         
         # Create subscriber
@@ -28,11 +30,11 @@ class HSVTuner(Node):
         cv2.namedWindow("HSV Trackbars")
         
         # Initial HSV values for gold detection
-        self.hue_min = 20
-        self.hue_max = 40
-        self.sat_min = 100
-        self.sat_max = 255
-        self.val_min = 100
+        self.hue_min = 16
+        self.hue_max = 39
+        self.sat_min = 119
+        self.sat_max = 183
+        self.val_min = 123
         self.val_max = 255
         
         # Create trackbars

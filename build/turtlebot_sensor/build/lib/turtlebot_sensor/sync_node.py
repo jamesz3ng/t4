@@ -1,552 +1,374 @@
 import cv2
-import numpy as np
 import rclpy
+import os
+import numpy as np
+import math
 from cv_bridge import CvBridge
-from message_filters import Subscriber
+from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
-from geometry_msgs.msg import Point
-from std_msgs.msg import Float32MultiArray
-from collections import deque
 
-class GoldenCubeDetectorNode(Node):
+class CubeDetectionNode(Node):
     def __init__(self):
-        super().__init__("sync_node")
+        super().__init__("cube_detection_node")
+        self.robot_id_str = os.environ.get('ROS_DOMAIN_ID')
         
-        # Parameters
+        # Declare parameters
         self.declare_parameter(
             name="image_sub_topic",
-            value="/T6/oakd/rgb/image_raw/compressed",
+            value=f"/T{self.robot_id_str}/oakd/rgb/image_raw/compressed",
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
             ),
         )
         
-        # Default parametres
-        self.declare_parameter("hue_min", 0)
-        self.declare_parameter("hue_max", 18)
-        self.declare_parameter("sat_min", 102)
-        self.declare_parameter("sat_max", 200)
-        self.declare_parameter("val_min", 101)
-        self.declare_parameter("val_max", 255)
+        # Golden color HSV ranges (adjust these based on your cube's specific color)
+        self.declare_parameter("hue_min", 16)
+        self.declare_parameter("hue_max", 39)
+        self.declare_parameter("sat_min", 119)
+        self.declare_parameter("sat_max", 183)
+        self.declare_parameter("val_min", 123)
+        self.declare_parameter("val_max", 202)
         
-        # Stability parameters
-        self.declare_parameter("confidence_threshold", 0.6)
-        self.declare_parameter("smoothing_window", 5)
-        self.declare_parameter("min_detection_area", 500)
+        # Shape detection parameters
+        self.declare_parameter("min_contour_area", 500)
+        self.declare_parameter("max_contour_area", 30000)
+        self.declare_parameter("epsilon_factor", 0.02)  # For polygon approximation
         
-        # New parameters for cube validation
-        self.declare_parameter("edge_threshold", 50)  # Canny edge detection threshold
-        self.declare_parameter("min_edge_ratio", 0.15)  # Minimum ratio of edge pixels to total area
-        self.declare_parameter("max_edge_ratio", 0.6)   # Maximum ratio (too many edges = noise)
-        self.declare_parameter("perimeter_check_thickness", 10)  # How thick the perimeter band to check
-        self.declare_parameter("min_perimeter_edge_ratio", 0.3)  # Min edge ratio in perimeter
+        # Temporal smoothing parameters (add these for stability)
+        self.declare_parameter("temporal_buffer_size", 4)
+        self.declare_parameter("min_consistent_detections", 2)  # Need 2/4 frames to start detecting
+        self.declare_parameter("confidence_threshold", 40.0)  # Lower threshold for your tuned params
         
-        # Color difference validation parameters
-        self.declare_parameter("color_diff_threshold", 30)  # Minimum color difference (HSV)
-        self.declare_parameter("min_different_sides", 3)  # Minimum sides that must have different colors
-        self.declare_parameter("side_sample_ratio", 0.3)  # Ratio of each side to sample for color
-        
-        # Get parameters
-        image_sub_topic = self.get_parameter("image_sub_topic").get_parameter_value().string_value
-        self.hue_min = self.get_parameter("hue_min").get_parameter_value().integer_value
-        self.hue_max = self.get_parameter("hue_max").get_parameter_value().integer_value
-        self.sat_min = self.get_parameter("sat_min").get_parameter_value().integer_value
-        self.sat_max = self.get_parameter("sat_max").get_parameter_value().integer_value
-        self.val_min = self.get_parameter("val_min").get_parameter_value().integer_value
-        self.val_max = self.get_parameter("val_max").get_parameter_value().integer_value
-        
-        self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
-        self.smoothing_window_size = self.get_parameter("smoothing_window").get_parameter_value().integer_value
-        self.min_detection_area = self.get_parameter("min_detection_area").get_parameter_value().integer_value
-        
-        # New cube validation parameters
-        self.edge_threshold = self.get_parameter("edge_threshold").get_parameter_value().integer_value
-        self.min_edge_ratio = self.get_parameter("min_edge_ratio").get_parameter_value().double_value
-        self.max_edge_ratio = self.get_parameter("max_edge_ratio").get_parameter_value().double_value
-        self.perimeter_check_thickness = self.get_parameter("perimeter_check_thickness").get_parameter_value().integer_value
-        self.min_perimeter_edge_ratio = self.get_parameter("min_perimeter_edge_ratio").get_parameter_value().double_value
-        
-        # Color difference validation parameters
-        self.color_diff_threshold = self.get_parameter("color_diff_threshold").get_parameter_value().integer_value
-        self.min_different_sides = self.get_parameter("min_different_sides").get_parameter_value().integer_value
-        self.side_sample_ratio = self.get_parameter("side_sample_ratio").get_parameter_value().double_value
+        image_sub_topic = (
+            self.get_parameter("image_sub_topic").get_parameter_value().string_value
+        )
         
         self.get_logger().info(f"{image_sub_topic=}")
-        self.get_logger().info(f"HSV thresholds: H({self.hue_min}-{self.hue_max}), S({self.sat_min}-{self.sat_max}), V({self.val_min}-{self.val_max})")
-        self.get_logger().info(f"Confidence threshold: {self.confidence_threshold}")
-        self.get_logger().info(f"Edge detection parameters: threshold={self.edge_threshold}, ratio=({self.min_edge_ratio}-{self.max_edge_ratio})")
-        self.get_logger().info(f"Color validation: diff_threshold={self.color_diff_threshold}, min_sides={self.min_different_sides}")
         
-        # Create subscribers
         self.image_sub = Subscriber(
             self, CompressedImage, image_sub_topic, qos_profile=qos_profile_sensor_data
         )
         
-        # Create publishers
-        self.cube_position_pub = self.create_publisher(Point, '/golden_cube/position', 10)
-        self.cube_properties_pub = self.create_publisher(Float32MultiArray, '/golden_cube/properties', 10)
-        
         self.cv_bridge = CvBridge()
-        
-        # Register callback
         self.image_sub.registerCallback(self.image_callback)
-        self.get_logger().info("Enhanced Golden Cube Detector Node initialized and waiting for images...")
         
-        # For tracking processing performance
-        self.frame_count = 0
-        self.last_log_time = self.get_clock().now()
+        # Tracking variables for temporal smoothing
+        self.detection_history = []
+        self.max_history = 5
+        self.detection_buffer = []
+        self.buffer_size = 4  # Match the parameter
+        self.min_consistent_detections = 2  # Match the parameter
+        self.last_valid_detection = None  # This will store a list of detection dictionaries
         
-        # Tracking variables for stability
-        self.last_detections = deque(maxlen=self.smoothing_window_size)
-        self.last_valid_detection = None
-        self.detection_counter = 0
-        self.no_detection_counter = 0
+        self.get_logger().info("Cube detection node initialized and waiting for images...")
+
+    def get_color_mask(self, image):
+        """Create a mask for golden/yellow colors"""
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         
+        # Get HSV parameters
+        h_min = self.get_parameter("hue_min").get_parameter_value().integer_value
+        h_max = self.get_parameter("hue_max").get_parameter_value().integer_value
+        s_min = self.get_parameter("sat_min").get_parameter_value().integer_value
+        s_max = self.get_parameter("sat_max").get_parameter_value().integer_value
+        v_min = self.get_parameter("val_min").get_parameter_value().integer_value
+        v_max = self.get_parameter("val_max").get_parameter_value().integer_value
+        
+        lower_golden = np.array([h_min, s_min, v_min])
+        upper_golden = np.array([h_max, s_max, v_max])
+        
+        mask = cv2.inRange(hsv, lower_golden, upper_golden)
+        
+        # Clean up the mask
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
+        return mask
+
+    def is_square_like(self, contour):
+        """Check if a contour is square-like"""
+        epsilon = self.get_parameter("epsilon_factor").get_parameter_value().double_value * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        
+        # A square should have 4 vertices
+        if len(approx) != 4:
+            return False, approx
+        
+        # Check if the shape is convex
+        if not cv2.isContourConvex(approx):
+            return False, approx
+        
+        # Calculate side lengths
+        sides = []
+        for i in range(4):
+            p1 = approx[i][0]
+            p2 = approx[(i + 1) % 4][0]
+            side_length = np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+            sides.append(side_length)
+        
+        # Check if all sides are approximately equal (within 20% tolerance)
+        avg_side = np.mean(sides)
+        for side in sides:
+            if abs(side - avg_side) / avg_side > 0.3:  # 30% tolerance
+                return False, approx
+        
+        # Check angles (should be close to 90 degrees)
+        angles = []
+        for i in range(4):
+            p1 = approx[i][0]
+            p2 = approx[(i + 1) % 4][0]
+            p3 = approx[(i + 2) % 4][0]
+            
+            # Calculate vectors
+            v1 = np.array([p1[0] - p2[0], p1[1] - p2[1]])
+            v2 = np.array([p3[0] - p2[0], p3[1] - p2[1]])
+            
+            # Calculate angle
+            cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+            cos_angle = np.clip(cos_angle, -1, 1)  # Handle numerical errors
+            angle = math.degrees(math.acos(abs(cos_angle)))
+            angles.append(angle)
+        
+        # Check if angles are close to 90 degrees (within 25 degrees tolerance)
+        for angle in angles:
+            if abs(angle - 90) > 25:
+                return False, approx
+        
+        return True, approx
+
+    def detect_cubes(self, image):
+        """Main cube detection function"""
+        # Get color mask
+        color_mask = self.get_color_mask(image)
+        
+        # Find contours
+        contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        cube_candidates = []
+        min_area = self.get_parameter("min_contour_area").get_parameter_value().integer_value
+        max_area = self.get_parameter("max_contour_area").get_parameter_value().integer_value
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            
+            # Filter by area
+            if area < min_area or area > max_area:
+                continue
+            
+            # Check if it's square-like
+            is_square, approx = self.is_square_like(contour)
+            
+            if is_square:
+                # Calculate center and bounding box
+                M = cv2.moments(contour)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    
+                    # Get bounding rectangle
+                    x, y, w, h = cv2.boundingRect(contour)
+                    
+                    # Calculate aspect ratio
+                    aspect_ratio = float(w) / h
+                    
+                    # Squares should have aspect ratio close to 1
+                    if 0.7 <= aspect_ratio <= 1.4:
+                        cube_candidates.append({
+                            'contour': contour,
+                            'approx': approx,
+                            'center': (cx, cy),
+                            'area': area,
+                            'bbox': (x, y, w, h),
+                            'aspect_ratio': aspect_ratio
+                        })
+        
+        return cube_candidates
+
+    def calculate_confidence(self, contour, area, aspect_ratio, approx):
+        """Calculate confidence score for detection stability"""
+        confidence = 100.0
+        
+        # Penalize deviation from square aspect ratio
+        aspect_penalty = abs(aspect_ratio - 1.0) * 50
+        confidence -= aspect_penalty
+        
+        # Penalize very small or very large areas (adjusted for your area range)
+        if area < 800:
+            confidence -= (800 - area) / 10
+        elif area > 20000:
+            confidence -= (area - 20000) / 100
+        
+        # Check how well the approximation fits the original contour
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter > 0:  # Avoid division by zero
+            approx_perimeter = cv2.arcLength(approx, True)
+            fit_penalty = abs(perimeter - approx_perimeter) / perimeter * 30
+            confidence -= fit_penalty
+        
+        # Boost confidence for areas in your sweet spot (1500-2500 based on logs)
+        if 1500 <= area <= 2500:
+            confidence += 10
+        
+        return max(0, min(100, confidence))
+
+    def draw_detections(self, image, cube_candidates):
+        """Draw detection results on the image"""
+        result_image = image.copy()
+        
+        for i, cube in enumerate(cube_candidates):
+            # Draw contour
+            cv2.drawContours(result_image, [cube['contour']], -1, (0, 255, 0), 2)
+            
+            # Draw approximated polygon
+            cv2.drawContours(result_image, [cube['approx']], -1, (255, 0, 0), 2)
+            
+            # Draw center point
+            cv2.circle(result_image, cube['center'], 5, (0, 0, 255), -1)
+            
+            # Draw bounding box
+            x, y, w, h = cube['bbox']
+            cv2.rectangle(result_image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            
+            # Add text information with confidence
+            confidence = cube.get('confidence', 0)
+            text = f"Cube {i+1}: Area={int(cube['area'])}, Conf={confidence:.1f}"
+            cv2.putText(result_image, text, (x, y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Add detection status
+        status_text = f"Buffer: {self.detection_buffer}, Detections: {len(cube_candidates)}"
+        cv2.putText(result_image, status_text, (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        return result_image
+
+    def smooth_detections(self, current_detections):
+        """Apply temporal smoothing to reduce flickering"""
+        # Add current detection count to buffer
+        self.detection_buffer.append(len(current_detections))
+        if len(self.detection_buffer) > self.buffer_size:
+            self.detection_buffer.pop(0)
+        
+        # Only report detections if we have consistent detection over multiple frames
+        if len(self.detection_buffer) >= self.min_consistent_detections:
+            consistent_detections = sum(1 for count in self.detection_buffer if count > 0)
+            
+            # For reporting a detection, need consistency
+            if consistent_detections >= self.min_consistent_detections:
+                if current_detections:
+                    self.last_valid_detection = current_detections.copy()
+                    return current_detections
+            
+            # For stopping detection, be more responsive
+            # If the last 2 frames have no detections, stop reporting
+            recent_detections = sum(1 for count in self.detection_buffer[-2:] if count > 0)
+            if recent_detections == 0:
+                self.last_valid_detection = None
+                return []
+            
+            # Otherwise, continue with last valid detection if available
+            if self.last_valid_detection is not None:
+                return self.last_valid_detection
+        
+        return []  # Not enough consistent detections
+
+    def are_detections_similar(self, det1, det2, max_distance=50):
+        """Check if two detections are likely the same object"""
+        if det1 is None or det2 is None:
+            return False
+        
+        center1 = det1.get('center', (0, 0))
+        center2 = det2.get('center', (0, 0))
+        
+        distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+        return distance < max_distance
+        """Draw detection results on the image"""
+        result_image = image.copy()
+        
+        for i, cube in enumerate(cube_candidates):
+            # Draw contour
+            cv2.drawContours(result_image, [cube['contour']], -1, (0, 255, 0), 2)
+            
+            # Draw approximated polygon
+            cv2.drawContours(result_image, [cube['approx']], -1, (255, 0, 0), 2)
+            
+            # Draw center point
+            cv2.circle(result_image, cube['center'], 5, (0, 0, 255), -1)
+            
+            # Draw bounding box
+            x, y, w, h = cube['bbox']
+            cv2.rectangle(result_image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            
+            # Add text information
+            text = f"Cube {i+1}: Area={int(cube['area'])}"
+            cv2.putText(result_image, text, (x, y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        return result_image
+
     def image_callback(self, image_msg: CompressedImage):
         try:
-            # Performance tracking
-            self.frame_count += 1
-            current_time = self.get_clock().now()
-            if (current_time.nanoseconds - self.last_log_time.nanoseconds) > 5e9:  # Log every 5 seconds
-                fps = self.frame_count / ((current_time.nanoseconds - self.last_log_time.nanoseconds) / 1e9)
-                self.get_logger().info(f"Processing at {fps:.2f} FPS")
-                self.frame_count = 0
-                self.last_log_time = current_time
-            
-            # Convert compressed image to OpenCV format
+            self.get_logger().info("Processing image for cube detection...")
             image = self.cv_bridge.compressed_imgmsg_to_cv2(image_msg)
             
-            # Validate image
-            if image is None:
-                self.get_logger().error("Received None image from cv_bridge")
-                return
-                
-            if len(image.shape) != 3 or image.shape[0] == 0 or image.shape[1] == 0:
-                self.get_logger().error(f"Invalid image shape: {image.shape}")
-                return
+            # Detect cubes
+            raw_detections = self.detect_cubes(image)
             
-            # Create a copy for visualization
-            display_image = image.copy()
+            # Apply temporal smoothing
+            stable_detections = self.smooth_detections(raw_detections)
             
-            # Process the image to detect golden cubes
-            try:
-                detection_result = self.detect_golden_cube(image, display_image)
-                if detection_result is None or len(detection_result) != 4:
-                    self.get_logger().error("detect_golden_cube returned invalid result")
-                    return
-                    
-                raw_detection, cube_center, cube_size, raw_confidence = detection_result
-                
-                # Validate detection result values
-                if raw_detection is None: raw_detection = False
-                if cube_center is None: cube_center = (0, 0)
-                if cube_size is None: cube_size = 0
-                if raw_confidence is None: raw_confidence = 0.0
-                    
-            except Exception as e:
-                self.get_logger().error(f"Error in detect_golden_cube: {str(e)}")
-                import traceback
-                self.get_logger().error(f"Traceback: {traceback.format_exc()}")
-                return
+            # Log detection results
+            if stable_detections:
+                self.get_logger().info(f"STABLE: Detected {len(stable_detections)} cube(s)")
+                for i, cube in enumerate(stable_detections):
+                    cx, cy = cube['center']
+                    area = cube['area']
+                    confidence = cube.get('confidence', 0)
+                    self.get_logger().info(f"  Cube {i+1}: Center=({cx}, {cy}), Area={area}, Conf={confidence:.1f}")
+            else:
+                if raw_detections:
+                    self.get_logger().info(f"UNSTABLE: {len(raw_detections)} raw detection(s) but not stable enough")
+                else:
+                    self.get_logger().info("No cube candidates detected")
             
-            # Apply temporal smoothing for stability
-            try:
-                stable_detection, stable_center, stable_size, stable_confidence = self.stabilize_detection(
-                    raw_detection, cube_center, cube_size, raw_confidence
-                )
-            except Exception as e:
-                self.get_logger().error(f"Error in stabilize_detection: {str(e)}")
-                return
+            # Draw results (show stable detections)
+            result_image = self.draw_detections(image, stable_detections)
             
-            # Publish results if a cube is detected
-            if stable_detection:
-                position_msg = Point()
-                position_msg.x = float(stable_center[0])
-                position_msg.y = float(stable_center[1])
-                position_msg.z = 0.0
-                self.cube_position_pub.publish(position_msg)
-                
-                properties_msg = Float32MultiArray()
-                properties_msg.data = [float(stable_size), stable_confidence]
-                self.cube_properties_pub.publish(properties_msg)
-                
-                if stable_size > 0: # Only draw if size is valid
-                    x_s = int(stable_center[0] - stable_size/2)
-                    y_s = int(stable_center[1] - stable_size/2)
-                    w_s = int(stable_size)
-                    h_s = int(stable_size)
-                    cv2.rectangle(display_image, (x_s, y_s), (x_s + w_s, y_s + h_s), (255, 0, 0), 2) # Blue
-                    cv2.circle(display_image, (int(stable_center[0]), int(stable_center[1])), 5, (255, 0, 0), -1)
-                    cv2.putText(display_image, f"Stable: {stable_confidence:.2f}", (x_s, y_s - 25 if y_s > 25 else y_s + 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                
-                # self.get_logger().info(f"Golden cube detected at ({stable_center[0]:.1f}, {stable_center[1]:.1f}) with size {stable_size:.1f} and confidence {stable_confidence:.2f}")
+            # Also show the color mask for debugging
+            color_mask = self.get_color_mask(image)
+            mask_colored = cv2.cvtColor(color_mask, cv2.COLOR_GRAY2BGR)
             
-            cv2.imshow("Golden Cube Detection", display_image)
+            # Create a side-by-side display
+            combined = np.hstack([result_image, mask_colored])
+            
+            cv2.imshow("Cube Detection (Original | Color Mask)", combined)
             cv2.waitKey(1)
+            
+            # Store detection history for tracking
+            self.detection_history.append(len(stable_detections))
+            if len(self.detection_history) > self.max_history:
+                self.detection_history.pop(0)
             
         except Exception as e:
             self.get_logger().error(f"Error processing image: {str(e)}")
-            import traceback
-            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
-    
-    def stabilize_detection(self, detection, center, size, confidence):
-        if not isinstance(center, tuple) or len(center) != 2: center = (0.0, 0.0)
-        if not isinstance(size, (int, float)): size = 0.0
-        if not isinstance(confidence, (int, float)): confidence = 0.0
-
-        if detection:
-            self.last_detections.append((True, center, size, confidence))
-            self.detection_counter += 1
-            self.no_detection_counter = 0
-            self.last_valid_detection = (center, size, confidence)
-        else:
-            self.last_detections.append((False, center, size, 0.0)) # Store last known even if not detected now
-            self.no_detection_counter += 1
-            self.detection_counter = 0
-        
-        if len(self.last_detections) < max(3, self.smoothing_window_size // 2): # Require at least 3 or half window
-            return detection, center, size, confidence
-        
-        recent_positive_detections = [d for d in self.last_detections if d[0]]
-        
-        if not recent_positive_detections or len(recent_positive_detections) < len(self.last_detections) / 2.0:
-            # If few positive detections, or if last valid detection is stale
-            if self.no_detection_counter > self.smoothing_window_size and self.last_valid_detection:
-                 # Gradually reduce confidence of last valid detection if no new one for a while
-                _, _, last_conf = self.last_valid_detection
-                # return False, (0,0), 0, last_conf * 0.5 # Option to decay
-            return False, (0,0), 0, 0.0
-
-        valid_centers_x = [d[1][0] for d in recent_positive_detections]
-        valid_centers_y = [d[1][1] for d in recent_positive_detections]
-        valid_sizes = [d[2] for d in recent_positive_detections]
-        valid_confidences = [d[3] for d in recent_positive_detections]
-        
-        stable_center_x = np.median(valid_centers_x)
-        stable_center_y = np.median(valid_centers_y)
-        stable_size = np.median(valid_sizes)
-        stable_confidence = np.median(valid_confidences)
-        
-        if stable_size < self.min_detection_area**0.5 / 5 : # If stable size is too small, likely noise
-            return False, (0,0), 0, 0.0
-
-        return True, (stable_center_x, stable_center_y), stable_size, stable_confidence
-    
-    def validate_cube_shape(self, image, contour, mask):
-        try:
-            x_bbox, y_bbox, w_bbox, h_bbox = cv2.boundingRect(contour) # Bounding box of the contour
-            
-            if w_bbox <= 0 or h_bbox <= 0: return False, 0.0, "Invalid bbox dims"
-            if y_bbox + h_bbox > image.shape[0] or x_bbox + w_bbox > image.shape[1]:
-                return False, 0.0, "Bbox exceeds image" # Should be caught by ROI creation if image is passed correctly
-            
-            roi_color = image[y_bbox : y_bbox + h_bbox, x_bbox : x_bbox + w_bbox]
-            roi_gray = cv2.cvtColor(roi_color, cv2.COLOR_BGR2GRAY)
-            roi_mask = mask[y_bbox : y_bbox + h_bbox, x_bbox : x_bbox + w_bbox] # Mask specific to this ROI
-            roi_hsv = cv2.cvtColor(roi_color, cv2.COLOR_BGR2HSV)
-            
-            if roi_color.size == 0 or roi_hsv.size == 0 or roi_mask.size == 0:
-                return False, 0.0, "Empty ROI"
-            
-            full_image_dims = image.shape[:2] # (height, width)
-
-            try:
-                color_validation_score, different_sides_count = self.check_perimeter_color_differences(
-                    roi_hsv, roi_mask, x_bbox, y_bbox, w_bbox, h_bbox, full_image_dims
-                )
-            except Exception as e:
-                self.get_logger().error(f"Error in check_perimeter_color_differences: {str(e)}")
-                color_validation_score, different_sides_count = 0.0, 0
-            
-            edges = cv2.Canny(roi_gray, self.edge_threshold, self.edge_threshold * 2)
-            # cv2.imshow("Edge Detection ROI", edges) # Debugging specific ROI
-            
-            golden_pixels_in_roi = np.sum(roi_mask > 0)
-            if golden_pixels_in_roi == 0: return False, 0.0, "No golden pixels in ROI"
-            
-            edges_in_golden = cv2.bitwise_and(edges, roi_mask)
-            edge_pixels_in_golden = np.sum(edges_in_golden > 0)
-            edge_ratio_in_golden = edge_pixels_in_golden / golden_pixels_in_roi
-            
-            perimeter_score = self.check_perimeter_edges(roi_gray, roi_mask)
-            corner_score = self.detect_cube_corners(roi_gray, roi_mask)
-            
-            image_area = full_image_dims[0] * full_image_dims[1]
-            object_area = w_bbox * h_bbox
-            size_ratio = object_area / image_area if image_area > 0 else 0
-            size_score = max(0, 1.0 - (size_ratio - 0.5) * 2) if size_ratio > 0.5 else 1.0
-            
-            edge_score = 1.0 if (self.min_edge_ratio <= edge_ratio_in_golden <= self.max_edge_ratio) else 0.0
-            
-            cube_confidence = (0.5 * color_validation_score + 0.2 * perimeter_score + 
-                              0.1 * corner_score + 0.1 * size_score + 0.1 * edge_score)
-            
-            reason = f"ClrSides:{different_sides_count}/{self.min_different_sides}, ClrScr:{color_validation_score:.2f}"
-            
-            is_valid_cube = (cube_confidence > self.confidence_threshold * 0.8 and # Slightly lower threshold for internal validation score
-                            different_sides_count >= self.min_different_sides)
-            
-            return is_valid_cube, cube_confidence, reason
-            
-        except Exception as e:
-            self.get_logger().error(f"Error in validate_cube_shape: {str(e)}")
-            import traceback
-            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
-            return False, 0.0, f"Validation error: {str(e)}"
-
-    def check_perimeter_color_differences(self, roi_hsv, roi_mask, 
-                                          bbox_x, bbox_y, bbox_w, bbox_h, 
-                                          full_image_dims):
-        h_roi, w_roi = roi_mask.shape
-        full_img_h, full_img_w = full_image_dims
-
-        golden_pixels_hsv = roi_hsv[roi_mask > 0]
-        if len(golden_pixels_hsv) == 0: return 0.0, 0
-        
-        avg_golden_color = np.mean(golden_pixels_hsv, axis=0)
-        if avg_golden_color is None or len(avg_golden_color) != 3: return 0.0, 0
-        
-        sides = {
-            'top': (0, int(h_roi * self.side_sample_ratio)),
-            'bottom': (int(h_roi * (1 - self.side_sample_ratio)), h_roi),
-            'left': (0, int(w_roi * self.side_sample_ratio)),
-            'right': (int(w_roi * (1 - self.side_sample_ratio)), w_roi)
-        }
-        
-        different_sides = 0
-        debug_image = cv2.cvtColor(roi_mask, cv2.COLOR_GRAY2BGR)
-        
-        for side_name, (start_coord, end_coord) in sides.items():
-            perimeter_hsv_region = None
-            mask_region_for_side = None # Renamed to avoid conflict
-            actual_start, actual_end = 0,0 
-
-            # Determine if this side of the bounding box is at the edge of the full image
-            is_at_full_image_edge = False
-            if side_name == 'top' and bbox_y == 0:
-                is_at_full_image_edge = True
-            elif side_name == 'bottom' and (bbox_y + bbox_h) >= full_img_h:
-                is_at_full_image_edge = True
-            elif side_name == 'left' and bbox_x == 0:
-                is_at_full_image_edge = True
-            elif side_name == 'right' and (bbox_x + bbox_w) >= full_img_w:
-                is_at_full_image_edge = True
-
-            # Define sample regions within ROI
-            if side_name in ['top', 'bottom']:
-                actual_start = max(0, start_coord)
-                actual_end = min(h_roi, end_coord)
-                if actual_start >= actual_end: continue
-                perimeter_hsv_region = roi_hsv[actual_start:actual_end, :]
-                mask_region_for_side = roi_mask[actual_start:actual_end, :]
-            else: # left, right
-                actual_start = max(0, start_coord)
-                actual_end = min(w_roi, end_coord)
-                if actual_start >= actual_end: continue
-                perimeter_hsv_region = roi_hsv[:, actual_start:actual_end]
-                mask_region_for_side = roi_mask[:, actual_start:actual_end]
-
-            # Draw rectangle for the sampled region first (default: yellow for "not processed yet")
-            rect_color = (0, 255, 255) # Yellow
-
-            if is_at_full_image_edge:
-                rect_color = (255, 255, 0) # Cyan for AT CAMERA EDGE
-                # This side automatically fails the color difference test
-            elif perimeter_hsv_region is None or perimeter_hsv_region.size == 0 or \
-                 mask_region_for_side is None or mask_region_for_side.size == 0:
-                rect_color = (0, 165, 255) # Orange for invalid sample region
-            else:
-                background_pixels_hsv = perimeter_hsv_region[mask_region_for_side == 0]
-                if len(background_pixels_hsv) > 10:
-                    avg_background_color = np.mean(background_pixels_hsv, axis=0)
-                    if avg_background_color is not None and len(avg_background_color) == 3:
-                        color_diff = self.calculate_hsv_difference(avg_golden_color, avg_background_color)
-                        if color_diff is not None and color_diff > self.color_diff_threshold:
-                            different_sides += 1
-                            rect_color = (0, 255, 0) # Green for different
-                        else:
-                            rect_color = (0, 0, 255) # Red for similar
-                    else: # Should not happen
-                        rect_color = (0, 165, 255) # Orange for avg_background_color error
-                else: # Not enough background pixels
-                    rect_color = (0, 165, 255) # Orange for not enough background
-
-            # Draw the rectangle on debug image
-            if side_name == 'top': cv2.rectangle(debug_image, (0, actual_start), (w_roi-1, actual_end-1), rect_color, 1)
-            elif side_name == 'bottom': cv2.rectangle(debug_image, (0, actual_start), (w_roi-1, actual_end-1), rect_color, 1)
-            elif side_name == 'left': cv2.rectangle(debug_image, (actual_start, 0), (actual_end-1, h_roi-1), rect_color, 1)
-            else: cv2.rectangle(debug_image, (actual_start, 0), (actual_end-1, h_roi-1), rect_color, 1)
-
-        cv2.imshow("Color Difference Analysis ROI", debug_image)
-        
-        validation_score = 0.0
-        if self.min_different_sides > 0:
-            if different_sides >= self.min_different_sides:
-                validation_score = 0.75 + 0.25 * ( (different_sides - self.min_different_sides) / float(max(1, 4 - self.min_different_sides)) )
-                validation_score = min(1.0, validation_score)
-            else:
-                validation_score = (different_sides / float(self.min_different_sides)) * 0.75
-        elif different_sides > 0 : # if min_different_sides is 0, any diff side is a pass
-             validation_score = 1.0
-
-        return validation_score, different_sides
-    
-    def calculate_hsv_difference(self, color1, color2):
-        if color1 is None or color2 is None or len(color1) !=3 or len(color2) !=3 :
-            return 0 # Or some other indicator of error
-
-        h_diff = min(abs(color1[0] - color2[0]), 180 - abs(color1[0] - color2[0]))
-        s_diff = abs(color1[1] - color2[1])
-        v_diff = abs(color1[2] - color2[2])
-        total_diff = 2.0 * h_diff + 1.0 * s_diff + 1.0 * v_diff
-        return total_diff
-        
-    def check_perimeter_edges(self, roi_gray, roi_mask):
-        h_roi, w_roi = roi_mask.shape
-        thickness = max(1, self.perimeter_check_thickness)
-        kernel = np.ones((thickness, thickness), np.uint8)
-        
-        dilated_mask = cv2.dilate(roi_mask, kernel, iterations=1)
-        perimeter_band = cv2.subtract(dilated_mask, roi_mask)
-        
-        if np.sum(perimeter_band > 0) == 0: return 0.0
-        
-        edges = cv2.Canny(roi_gray, self.edge_threshold, self.edge_threshold * 2)
-        edges_in_perimeter = cv2.bitwise_and(edges, perimeter_band)
-        edge_pixels_in_perimeter = np.sum(edges_in_perimeter > 0)
-        perimeter_pixels_count = np.sum(perimeter_band > 0)
-        
-        perimeter_edge_ratio = edge_pixels_in_perimeter / perimeter_pixels_count if perimeter_pixels_count > 0 else 0
-        
-        score = 0.0
-        if self.min_perimeter_edge_ratio > 0:
-            if perimeter_edge_ratio >= self.min_perimeter_edge_ratio:
-                score = min(1.0, (perimeter_edge_ratio / self.min_perimeter_edge_ratio) * 0.75 + 0.25)
-            else:
-                score = (perimeter_edge_ratio / self.min_perimeter_edge_ratio) * 0.75
-        elif perimeter_edge_ratio > 0: # If min_ratio is 0, any edge is good
-            score = 1.0
-        return score
-    
-    def detect_cube_corners(self, roi_gray, roi_mask):
-        if roi_gray.size == 0 or roi_mask.size == 0: return 0.0
-        roi_gray_float = np.float32(roi_gray)
-        corners = cv2.cornerHarris(roi_gray_float, 2, 3, 0.04) # blockSize, ksize, k
-        # corners = cv2.dilate(corners, None) # Optional
-        
-        if corners.max() <= 0: return 0.0
-        corner_threshold = 0.01 * corners.max()
-        
-        corner_pixels_mask = (corners > corner_threshold).astype(np.uint8) * 255
-        corners_in_golden = cv2.bitwise_and(corner_pixels_mask, roi_mask)
-        
-        # Instead of pixel count, count distinct corner regions
-        contours, _ = cv2.findContours(corners_in_golden, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        num_distinct_corners = len(contours)
-
-        if 3 <= num_distinct_corners <= 7: # Cube faces usually have 3-4 visible corners, allow some error
-            return 1.0
-        elif 2 <= num_distinct_corners <= 8:
-            return 0.7
-        elif num_distinct_corners > 0:
-            return 0.3
-        else:
-            return 0.0
-    
-    def detect_golden_cube(self, image, display_image):
-        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_gold = np.array([self.hue_min, self.sat_min, self.val_min])
-        upper_gold = np.array([self.hue_max, self.sat_max, self.val_max])
-        mask = cv2.inRange(hsv_image, lower_gold, upper_gold)
-        
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.erode(mask, kernel, iterations=1)
-        mask = cv2.dilate(mask, kernel, iterations=2)
-        
-        cv2.imshow("Gold Mask Full", mask)
-        
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        best_detection = {"detected": False, "center": (0,0), "size": 0, "confidence": 0.0}
-
-        if contours:
-            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:3] # Check top 3 largest
-
-            for contour in contours:
-                area = cv2.contourArea(contour)
-                if area <= self.min_detection_area: continue
-
-                rect = cv2.minAreaRect(contour)
-                box_points = cv2.boxPoints(rect)
-                box_int = np.int0(box_points)
-                
-                (center_x, center_y), (width, height), angle = rect
-                if width <=0 or height <=0: continue
-
-                x_br, y_br, w_br, h_br = cv2.boundingRect(contour)
-                
-                aspect_ratio = max(width, height) / min(width, height)
-                hull = cv2.convexHull(contour)
-                hull_area = cv2.contourArea(hull)
-                solidity = float(area) / hull_area if hull_area > 0 else 0
-                
-                epsilon = 0.04 * cv2.arcLength(contour, True)
-                approx = cv2.approxPolyDP(contour, epsilon, True)
-                
-                is_valid_cube, cube_validation_score, validation_reason = self.validate_cube_shape(
-                    image, contour, mask # Pass full image, contour, and full mask
-                )
-                
-                ar_confidence = max(0.0, 1.0 - abs(1.0 - aspect_ratio)) # Should be close to 1
-                shape_confidence = max(0.0, 1.0 - (abs(len(approx) - 4) / 4.0))
-                solidity_confidence = min(1.0, solidity * 1.1) # Solidity is often high for good shapes
-                
-                current_confidence = (0.20 * ar_confidence + 0.20 * shape_confidence + 
-                                     0.10 * solidity_confidence + 0.50 * cube_validation_score) # Heavier on validation
-                
-                current_size = (width + height) / 2.0
-                
-                # Draw individual contour processing attempt
-                temp_display = display_image.copy() if len(contours) > 1 else display_image # Avoid overdrawing if only one
-                
-                if current_confidence > self.confidence_threshold and is_valid_cube:
-                    if current_confidence > best_detection["confidence"]:
-                        best_detection = {
-                            "detected": True, 
-                            "center": (center_x, center_y), 
-                            "size": current_size, 
-                            "confidence": current_confidence
-                        }
-                    cv2.drawContours(temp_display, [box_int], 0, (0, 255, 0), 2)
-                    cv2.putText(temp_display, f"VALID: {current_confidence:.2f}", (x_br, y_br - 10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                else:
-                    cv2.drawContours(temp_display, [box_int], 0, (0, 165, 255), 1) # Orange for rejected
-                    reason_str = "LowConf" if not is_valid_cube else "NotCube"
-                    cv2.putText(temp_display, f"REJ({reason_str}):{current_confidence:.2f} {validation_reason}", (x_br, y_br - 10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 165, 255), 1)
-                
-                if len(contours) > 1 : cv2.imshow(f"Contour Proc {contours.index(contour)}", temp_display)
-
-
-        return best_detection["detected"], best_detection["center"], best_detection["size"], best_detection["confidence"]
 
 def main(args=None):
     rclpy.init(args=args)
-    detector_node = GoldenCubeDetectorNode()
+    cube_detector = CubeDetectionNode()
+    
     try:
-        rclpy.spin(detector_node)
+        rclpy.spin(cube_detector)
     except KeyboardInterrupt:
-        detector_node.get_logger().info("KeyboardInterrupt, shutting down.")
+        pass
     finally:
+        # Clean up
         cv2.destroyAllWindows()
-        detector_node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        cube_detector.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
