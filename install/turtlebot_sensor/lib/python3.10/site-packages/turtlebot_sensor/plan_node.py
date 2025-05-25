@@ -1,32 +1,27 @@
 import rclpy
 from rclpy.node import Node
 
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist, Pose # Added Pose for marker
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA # Bool is no longer used for bumper
-from sensor_msgs.msg import LaserScan, PointCloud2 # Added PointCloud2
-from sensor_msgs_py import point_cloud2 as pc2 # Helper for PointCloud2
+from std_msgs.msg import ColorRGBA, Header
+from sensor_msgs.msg import LaserScan # PointCloud2 removed
 from tf2_ros import Buffer, TransformListener
-import tf2_ros
+# import tf2_ros # Not needed directly if Buffer and TransformListener are imported
 
 import numpy as np
 import heapq
 from scipy.ndimage import maximum_filter
 import math
 import time
-from enum import Enum
+# from enum import Enum # Removed Enum
 
-from std_msgs.msg import Header
+# Removed: from sensor_msgs_py import point_cloud2 as pc2
+# Removed: from std_msgs.msg import Bool
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-class ObstacleAvoidanceState(Enum):
-    NORMAL = "normal"
-    OBSTACLE_DETECTED = "obstacle_detected"
-    BACKING_UP = "backing_up"
-    TURNING = "turning"
-    REPLANNING = "replanning"
+# Removed ObstacleAvoidanceState Enum
 
 class PlanningNode(Node):
     def __init__(self):
@@ -39,63 +34,68 @@ class PlanningNode(Node):
         self.robot_namespace = f"/T{self.robot_id_str}"
 
         self.map_tf_frame = "map"
-        self.robot_odom_tf_frame = "odom"
+        self.robot_odom_tf_frame = "odom" # Keep for potential future use, not directly used in this version
         self.robot_base_footprint_tf_frame = "base_footprint"
-        self.robot_base_link_tf_frame = "base_link"
+        self.robot_base_link_tf_frame = "base_link" # Often the source frame for TF
 
         self.get_logger().info(f"Planning node initialized for ROS_DOMAIN_ID: {self.robot_id_str} (Namespace: {self.robot_namespace})")
-        # ... (other log messages for TF frames)
+        self.get_logger().info(f"Using map frame: '{self.map_tf_frame}'")
+        self.get_logger().info(f"Expecting robot pose in TF from '{self.robot_base_footprint_tf_frame}' or '{self.robot_base_link_tf_frame}' to '{self.map_tf_frame}'")
 
         self.map_data_storage = None
         self.inflated_map_storage = None
         self.map_info_storage = None
-        self.current_goal_pose = None
-        self.current_path = []
+        self.current_goal_pose = None # Stores geometry_msgs/Pose
+        self.current_path = [] # List of (world_x, world_y) tuples
 
-        self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL
-        # self.bumper_triggered = False # This flag is effectively managed by obstacle_avoidance_state != NORMAL
-        self.left_bumper_hit = False
-        self.right_bumper_hit = False
-        self.front_bumper_hit = False
-        self.obstacle_avoidance_start_time = 0.0
-        self.robot_pose_when_obstacle_detected = None # Store pose for replanning
-        self.replanning_attempts = 0
-        self.max_replanning_attempts = 3
-        # Backup/Turn parameters are now mostly managed within execute_obstacle_avoidance
-        self.target_backup_distance = 0.3
-        self.target_turn_angle = 0.0
-
+        # --- Obstacle Avoidance and Bumper Code Removed ---
+        # self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL # Removed
+        # self.left_bumper_hit = False # Removed
+        # self.right_bumper_hit = False # Removed
+        # self.front_bumper_hit = False # Removed
+        # self.obstacle_avoidance_start_time = 0.0 # Removed
+        # self.robot_pose_when_obstacle_detected = None # Removed
+        # self.replanning_attempts = 0 # Removed (can be re-added for general A* retries if needed)
+        # self.max_replanning_attempts = 3 # Removed
 
         self.tf_buffer = Buffer()
+        # spin_thread=True creates a daemon thread for TF listener.
+        # This thread can sometimes cause unclean shutdown messages (RCLError)
+        # if rclpy context is invalidated before it fully stops.
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
 
         self.declare_parameter('map_topic_base', 'map')
         self.declare_parameter('goal_topic_base', 'goal_pose')
         self.declare_parameter('cmd_vel_topic_base', 'cmd_vel')
         self.declare_parameter('waypoints_topic_base', 'waypoints')
-        self.declare_parameter('bumper_topic_base', 'mobile_base/sensors/bumper_pointcloud')
+        # self.declare_parameter('bumper_topic_base', 'mobile_base/sensors/bumper_pointcloud') # Removed
         self.declare_parameter('scan_topic_base', 'scan')
+        self.declare_parameter('a_star_max_nodes', 60000) # Added parameter for A*
 
         map_topic_base = self.get_parameter('map_topic_base').get_parameter_value().string_value
         goal_topic_base = self.get_parameter('goal_topic_base').get_parameter_value().string_value
         cmd_vel_topic_base = self.get_parameter('cmd_vel_topic_base').get_parameter_value().string_value
         waypoints_topic_base = self.get_parameter('waypoints_topic_base').get_parameter_value().string_value
-        bumper_topic_base = self.get_parameter('bumper_topic_base').get_parameter_value().string_value
+        # bumper_topic_base = self.get_parameter('bumper_topic_base').get_parameter_value().string_value # Removed
         scan_topic_base = self.get_parameter('scan_topic_base').get_parameter_value().string_value
+        self.a_star_max_nodes = self.get_parameter('a_star_max_nodes').get_parameter_value().integer_value
+
 
         self.map_topic_actual = f"{self.robot_namespace}/{map_topic_base}"
         self.goal_topic_actual = f"{self.robot_namespace}/{goal_topic_base}"
         self.cmd_vel_topic_actual = f"{self.robot_namespace}/{cmd_vel_topic_base}"
         self.waypoints_topic_actual = f"{self.robot_namespace}/{waypoints_topic_base}"
-        self.bumper_topic_actual = f"{self.robot_namespace}/{bumper_topic_base}" # Will now be PointCloud2
+        # self.bumper_topic_actual = f"{self.robot_namespace}/{bumper_topic_base}" # Removed
         self.scan_topic_actual = f"{self.robot_namespace}/{scan_topic_base}"
 
         self.get_logger().info(f"Subscribing to map topic: {self.map_topic_actual}")
         self.get_logger().info(f"Subscribing to goal topic: {self.goal_topic_actual}")
-        self.get_logger().info(f"Subscribing to bumper (PointCloud2) topic: {self.bumper_topic_actual}")
+        # self.get_logger().info(f"Subscribing to bumper (PointCloud2) topic: {self.bumper_topic_actual}") # Removed
         self.get_logger().info(f"Subscribing to scan topic: {self.scan_topic_actual}")
         self.get_logger().info(f"Publishing cmd_vel to: {self.cmd_vel_topic_actual}")
         self.get_logger().info(f"Publishing waypoints to: {self.waypoints_topic_actual}")
+        self.get_logger().info(f"A* max nodes: {self.a_star_max_nodes}")
+
 
         qos_map = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=1)
         qos_goal = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
@@ -104,179 +104,80 @@ class PlanningNode(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, self.map_topic_actual, self.map_callback, qos_map)
         self.goal_sub = self.create_subscription(PoseStamped, self.goal_topic_actual, self.goal_callback, qos_goal)
         
-        # Subscribe to PointCloud2 for bumper data
-        self.bumper_sub = self.create_subscription(
-            PointCloud2,
-            self.bumper_topic_actual,
-            self.bumper_pointcloud_callback, # New callback
-            qos_sensor
-        )
-
-        self.inflated_map_pub = self.create_publisher(
-            OccupancyGrid,
-            f"{self.robot_namespace}/inflated_map", # Topic name for the inflated map
-            qos_map
-        )
-
-        # LaserScan for proximity detection (can complement bumper_pointcloud)
+        # Bumper subscription removed
+        # LaserScan for proximity detection (basic safety)
         self.scan_sub = self.create_subscription(LaserScan, self.scan_topic_actual, self.scan_callback, qos_sensor)
         
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic_actual, 10)
         self.marker_pub = self.create_publisher(MarkerArray, self.waypoints_topic_actual, 10)
 
-        self.path_execution_timer = self.create_timer(0.2, self.path_following_update)
+        self.path_execution_timer = self.create_timer(0.2, self.path_following_update) # Timer for path following logic
 
     def quaternion_to_yaw(self, q_geometry_msg):
+        # q_geometry_msg is geometry_msgs.msg.Quaternion
         siny_cosp = 2 * (q_geometry_msg.w * q_geometry_msg.z + q_geometry_msg.x * q_geometry_msg.y)
         cosy_cosp = 1 - 2 * (q_geometry_msg.y * q_geometry_msg.y + q_geometry_msg.z * q_geometry_msg.z)
         return math.atan2(siny_cosp, cosy_cosp)
 
-    def reset_bumper_flags(self):
-        """Reset all bumper hit-type flags"""
-        self.get_logger().debug("Resetting specific bumper hit flags (left, right, front).")
-        self.left_bumper_hit = False
-        self.right_bumper_hit = False
-        self.front_bumper_hit = False
-
-    def bumper_pointcloud_callback(self, msg: PointCloud2):
-        # self.get_logger().debug(f"Bumper PointCloud received. Frame: {msg.header.frame_id}, Num points: {msg.height * msg.width}", throttle_duration_sec=5.0)
-
-        # Check if we are already avoiding obstacles
-        if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
-            # self.get_logger().debug("Bumper PointCloud: Already in avoidance state, skipping detailed check.", throttle_duration_sec=5.0)
-            return
-
-        # --- IMPORTANT: TUNE THESE REGIONS CAREFULLY ---
-        # These define detection boxes relative to msg.header.frame_id (likely 'base_link' or similar).
-        # Points are (x, y, z). For base_link: +x forward, +y left, +z up.
-        # Adjust these values based on your robot's geometry and sensor characteristics.
-        # Small values for close "bumper-like" detection.
-
-        # Front detection region:
-        FRONT_MIN_X = 0.01    # Min X distance (just in front of sensor origin)
-        FRONT_MAX_X = 0.10    # Max X distance (e.g., 10cm) for a "front hit"
-        FRONT_MAX_Y_ABS = 0.12 # Max Y distance from center (e.g., +/- 12cm wide)
-        FRONT_MAX_Z_ABS = 0.15 # Max Z distance from sensor height (e.g. +/- 15cm, to filter ground/high points)
-
-
-        # Left detection region (positive Y is usually left):
-        LEFT_MIN_Y = 0.05     # Min Y distance from center (e.g., 5cm left of robot's Y=0)
-        LEFT_MAX_Y = 0.20     # Max Y distance (e.g., 20cm left)
-        LEFT_MAX_X_ABS = 0.10 # Max X deviation for a "side hit" (e.g., +/-10cm along X-axis)
-        LEFT_MAX_Z_ABS = 0.15 # Max Z deviation
-
-        # Right detection region (negative Y is usually right):
-        RIGHT_MIN_Y = -0.20   # Min Y distance (e.g., 20cm right, so -0.20)
-        RIGHT_MAX_Y = -0.05   # Max Y distance (e.g., 5cm right, so -0.05)
-        RIGHT_MAX_X_ABS = 0.10# Max X deviation
-        RIGHT_MAX_Z_ABS = 0.15 # Max Z deviation
-
-        detected_front = False
-        detected_left = False
-        detected_right = False
-
-        # Iterate through points. field_names might need adjustment based on actual PointCloud2 structure.
-        # Common fields are 'x', 'y', 'z'.
-        try:
-            for point in pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True):
-                px, py, pz = point[0], point[1], point[2]
-
-                # Check Front Region
-                if FRONT_MIN_X < px < FRONT_MAX_X and \
-                   abs(py) < FRONT_MAX_Y_ABS and \
-                   abs(pz) < FRONT_MAX_Z_ABS: # Add Z check if needed
-                    detected_front = True
-                    # self.get_logger().info(f"Bumper PointCloud: FRONT HIT detected at x={px:.2f}, y={py:.2f}, z={pz:.2f}")
-                    break # Prioritize front hit, stop checking
-
-                # Check Left Region
-                if LEFT_MIN_Y < py < LEFT_MAX_Y and \
-                   abs(px) < LEFT_MAX_X_ABS and \
-                   abs(pz) < LEFT_MAX_Z_ABS:
-                    detected_left = True
-                    # self.get_logger().info(f"Bumper PointCloud: LEFT HIT detected at x={px:.2f}, y={py:.2f}, z={pz:.2f}")
-                    # Don't break here, could also be a front hit if regions overlap
-
-                # Check Right Region
-                if RIGHT_MIN_Y < py < RIGHT_MAX_Y and \
-                   abs(px) < RIGHT_MAX_X_ABS and \
-                   abs(pz) < RIGHT_MAX_Z_ABS:
-                    detected_right = True
-                    # self.get_logger().info(f"Bumper PointCloud: RIGHT HIT detected at x={px:.2f}, y={py:.2f}, z={pz:.2f}")
-                    # Don't break here
-            
-            if detected_front or detected_left or detected_right:
-                # Ensure we are in normal state before initiating avoidance
-                if self.obstacle_avoidance_state == ObstacleAvoidanceState.NORMAL:
-                    self.get_logger().warn(f"BUMPER POINTCLOUD: Obstacle detected! F:{detected_front}, L:{detected_left}, R:{detected_right}. Initiating avoidance.")
-                    self.reset_bumper_flags() # Clear any old specific hit types
-
-                    # Determine primary hit type
-                    if detected_front:
-                        self.front_bumper_hit = True
-                    elif detected_left and detected_right: # Both sides implies front for simplicity
-                        self.front_bumper_hit = True
-                    elif detected_left:
-                        self.left_bumper_hit = True
-                    elif detected_right:
-                        self.right_bumper_hit = True
-                    else: # Should not happen if one of them was true
-                        self.front_bumper_hit = True # Default to front if logic is odd
-
-                    self.initiate_obstacle_avoidance()
-        except Exception as e:
-            self.get_logger().error(f"Error processing PointCloud2: {e}")
-
+    # --- Bumper related methods removed ---
+    # reset_bumper_flags
+    # bumper_pointcloud_callback
+    # initiate_obstacle_avoidance
+    # execute_obstacle_avoidance
 
     def scan_callback(self, msg: LaserScan):
         if not msg.ranges:
+            self.get_logger().debug("Scan callback: Empty ranges.", throttle_duration_sec=5.0)
             return
         
-        # This scan callback is for slightly further obstacles than the bumper_pointcloud
-        min_distance_laser = 0.20  # e.g., 20cm - adjust as needed, should be > bumper_pointcloud range
+        # This scan callback is for very close obstacles as a last-resort safety.
+        # Should be tuned to be just in front of the robot, further than physical bumper but closer than typical planning avoidance.
+        min_distance_laser_stop = 0.15  # e.g., 15cm - if an obstacle is this close, stop.
 
-        # Check if we are already avoiding obstacles
-        if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
-            # self.get_logger().debug("LaserScan: Already in avoidance state, skipping check.", throttle_duration_sec=5.0)
+        # Consider a narrow frontal cone for this emergency stop.
+        num_ranges = len(msg.ranges)
+        center_index = num_ranges // 2
+        # e.g., +/- 15 degrees from center. angle_increment is in radians.
+        # Assuming laser scans symmetrically around 0 radians (forward).
+        angle_fov_deg = 30 
+        half_fov_rad = math.radians(angle_fov_deg / 2.0)
+        
+        if msg.angle_increment == 0: # Avoid division by zero
+            self.get_logger().warn("Scan callback: angle_increment is zero.", throttle_duration_sec=5.0)
             return
 
-        front_angles = len(msg.ranges) // 6  # Front 60 degrees
-        center = len(msg.ranges) // 2
+        num_rays_half_fov = int(half_fov_rad / msg.angle_increment)
         
-        front_ranges = msg.ranges[center - front_angles : center + front_angles]
-        valid_ranges = [r for r in front_ranges if msg.range_min < r < msg.range_max and r < min_distance_laser]
+        start_idx = max(0, center_index - num_rays_half_fov)
+        end_idx = min(num_ranges, center_index + num_rays_half_fov + 1) # +1 because slice end is exclusive
         
-        if valid_ranges: # No need for min(valid_ranges) < min_distance_laser, already filtered
-            if self.obstacle_avoidance_state == ObstacleAvoidanceState.NORMAL:
-                self.get_logger().warn(f"LASERSCAN: Close obstacle detected at {min(valid_ranges):.2f}m by LaserScan! Initiating avoidance.")
-                self.reset_bumper_flags()
-                self.front_bumper_hit = True # Laser scan primarily indicates front obstacle for this simplified logic
-                self.initiate_obstacle_avoidance()
+        front_ranges = msg.ranges[start_idx:end_idx]
+        
+        # Filter for valid ranges that are too close
+        critically_close_ranges = [r for r in front_ranges if msg.range_min < r < msg.range_max and r < min_distance_laser_stop]
+        
+        if critically_close_ranges:
+            self.get_logger().warn(
+                f"LASERSCAN: Critically close obstacle detected at {min(critically_close_ranges):.2f}m (within {min_distance_laser_stop}m). "
+                f"Stopping robot and clearing current path."
+            )
+            stop_cmd = Twist() # Zero velocities
+            self.cmd_pub.publish(stop_cmd)
+            self.current_path = []
+            # self.current_goal_pose = None # Optionally clear the goal too, to prevent immediate replanning into the obstacle
+            self.publish_path_markers() # Update markers to show no path
 
-
-    def initiate_obstacle_avoidance(self):
-        if self.obstacle_avoidance_state == ObstacleAvoidanceState.NORMAL:
-            self.obstacle_avoidance_state = ObstacleAvoidanceState.OBSTACLE_DETECTED
-            self.obstacle_avoidance_start_time = time.time()
-            
-            current_pos = self.get_current_robot_pose()
-            if current_pos:
-                self.robot_pose_when_obstacle_detected = current_pos
-            
-            self.get_logger().info(f"INITIATING AVOIDANCE: State -> OBSTACLE_DETECTED. Hit flags: F:{self.front_bumper_hit}, L:{self.left_bumper_hit}, R:{self.right_bumper_hit}")
-        else:
-            self.get_logger().warn(f"Attempted to initiate_obstacle_avoidance, but state is already {self.obstacle_avoidance_state.value}")
-
-
-    def get_current_robot_pose(self):
+    def get_current_robot_pose_in_map(self):
+        """Gets the robot's current pose (x, y, yaw) in the map frame."""
         source_frames_to_try = [self.robot_base_footprint_tf_frame, self.robot_base_link_tf_frame]
         for source_frame_id in source_frames_to_try:
             try:
+                # Use rclpy.time.Time(seconds=0) for latest available transform
                 transform_stamped = self.tf_buffer.lookup_transform(
                     self.map_tf_frame,
                     source_frame_id,
-                    rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.1)
+                    rclpy.time.Time(seconds=0), # Get the latest available transform
+                    timeout=rclpy.duration.Duration(seconds=0.1) # Short timeout
                 )
                 return {
                     'x': transform_stamped.transform.translation.x,
@@ -284,524 +185,512 @@ class PlanningNode(Node):
                     'yaw': self.quaternion_to_yaw(transform_stamped.transform.rotation)
                 }
             except Exception as e:
-                self.get_logger().debug(f"Get_current_robot_pose TF lookup failed: {e}", throttle_duration_sec=2.0)
-                continue
-        return None
-
-    def execute_obstacle_avoidance(self):
-        cmd = Twist()
-        current_time = time.time()
-        if self.obstacle_avoidance_start_time == 0.0 and self.obstacle_avoidance_state != ObstacleAvoidanceState.OBSTACLE_DETECTED:
-             self.get_logger().warn(f"Obstacle avoidance start time is 0 for state {self.obstacle_avoidance_state.value}, resetting.")
-             self.obstacle_avoidance_start_time = current_time
-
-        elapsed_time = current_time - self.obstacle_avoidance_start_time
-        
-        # self.get_logger().debug(f"Execute Avoidance: State={self.obstacle_avoidance_state.value}, Elapsed={elapsed_time:.2f}s", throttle_duration_sec=1.0)
-
-        if self.obstacle_avoidance_state == ObstacleAvoidanceState.OBSTACLE_DETECTED:
-            self.obstacle_avoidance_state = ObstacleAvoidanceState.BACKING_UP
-            # self.backup_distance = 0.0 # Not used anymore for control
-            self.obstacle_avoidance_start_time = current_time # Reset timer for this sub-state
-            self.get_logger().info("Avoidance: OBSTACLE_DETECTED -> BACKING_UP")
-            
-        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.BACKING_UP:
-            backup_speed = -0.1  # m/s
-            backup_duration = 2.0  # seconds (adjust as needed)
-            
-            if elapsed_time < backup_duration:
-                cmd.linear.x = backup_speed
-                cmd.angular.z = 0.0
-                self.get_logger().debug(f"Avoidance: BACKING_UP (elapsed: {elapsed_time:.2f}/{backup_duration:.2f})")
-            else:
-                self.obstacle_avoidance_state = ObstacleAvoidanceState.TURNING
-                # self.turn_angle_completed = 0.0 # Not used for control
-                
-                if self.left_bumper_hit:
-                    self.target_turn_angle = -math.pi / 2.5  # Turn right (approx 72 deg)
-                    self.get_logger().info("Avoidance: BACKUP complete. Left hit -> Turning RIGHT")
-                elif self.right_bumper_hit:
-                    self.target_turn_angle = math.pi / 2.5   # Turn left
-                    self.get_logger().info("Avoidance: BACKUP complete. Right hit -> Turning LEFT")
-                elif self.front_bumper_hit:
-                    self.target_turn_angle = math.pi / 2 if np.random.random() > 0.5 else -math.pi / 2 # Random for front
-                    self.get_logger().info(f"Avoidance: BACKUP complete. Front hit -> Turning {'LEFT' if self.target_turn_angle > 0 else 'RIGHT'} randomly")
-                else:  # Fallback if no specific hit flag was set (should not happen with new logic)
-                    self.get_logger().warn("Avoidance: BACKUP complete. No specific hit flag, defaulting to random turn.")
-                    self.target_turn_angle = math.pi / 2 if np.random.random() > 0.5 else -math.pi / 2
-                
-                self.obstacle_avoidance_start_time = current_time # Reset timer for TURNING
-                
-        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.TURNING:
-            if self.target_turn_angle == 0: # Safety check
-                self.get_logger().error("Avoidance: TURNING state, but target_turn_angle is 0. Defaulting.")
-                self.target_turn_angle = math.pi / 2 
-
-            turn_speed_magnitude = 0.3  # rad/s
-            turn_speed = turn_speed_magnitude * np.sign(self.target_turn_angle)
-            
-            turn_duration = abs(self.target_turn_angle / turn_speed) if turn_speed != 0 else 0.1 # Avoid div by zero
-            
-            if elapsed_time < turn_duration and turn_speed != 0:
-                cmd.linear.x = 0.0
-                cmd.angular.z = turn_speed
-                self.get_logger().debug(f"Avoidance: TURNING (elapsed: {elapsed_time:.2f}/{turn_duration:.2f}, speed: {turn_speed:.2f})")
-            else:
-                self.obstacle_avoidance_state = ObstacleAvoidanceState.REPLANNING
-                self.obstacle_avoidance_start_time = current_time # Reset timer for REPLANNING pause
-                self.get_logger().info("Avoidance: TURN complete -> REPLANNING")
-                
-        elif self.obstacle_avoidance_state == ObstacleAvoidanceState.REPLANNING:
-            replan_pause_duration = 1.0 # seconds to pause before replanning
-            if elapsed_time > replan_pause_duration:
-                self.get_logger().info(f"Avoidance: REPLANNING (pause over). Replanning attempts: {self.replanning_attempts}/{self.max_replanning_attempts}")
-                
-                if self.replanning_attempts < self.max_replanning_attempts:
-                    if self.current_goal_pose: # Only replan if there's an active goal
-                        self.get_logger().info("Attempting to plan new path...")
-                        self.plan_new_path() # This function logs its own success/failure
-                    else:
-                        self.get_logger().info("No current goal, skipping replan.")
-                    self.replanning_attempts += 1
-                else:
-                    self.get_logger().warn(f"Max replanning attempts ({self.max_replanning_attempts}) reached for current goal. Clearing goal and path.")
-                    self.current_path = []
-                    self.current_goal_pose = None
-                    # self.replanning_attempts will be reset when a new goal is received.
-
-                # Transition back to normal AFTER attempting replan or deciding not to
-                self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL
-                self.reset_bumper_flags() # Clear specific hit types for the next event
-                self.get_logger().info("Avoidance: REPLANNING actions complete -> NORMAL state.")
-            else:
-                # Stay still during pause
-                self.get_logger().debug(f"Avoidance: REPLANNING (pausing {elapsed_time:.2f}/{replan_pause_duration:.2f})")
-                cmd.linear.x = 0.0
-                cmd.angular.z = 0.0
-        
-        return cmd
+                self.get_logger().debug(
+                    f"get_current_robot_pose_in_map: TF lookup failed from '{source_frame_id}' to '{self.map_tf_frame}': {e}",
+                    throttle_duration_sec=2.0
+                )
+        return None # Return None if TF lookup fails for all tried frames
 
     def map_callback(self, msg: OccupancyGrid):
         self.get_logger().info(f"Map data received (Size: {msg.info.width}x{msg.info.height}, Res: {msg.info.resolution:.3f})", throttle_duration_sec=10.0)
         self.map_data_storage = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
         self.map_info_storage = msg.info
-        self.inflate_map_data()
+        self.inflate_map_data() # Re-inflate map whenever new map data arrives
 
     def inflate_map_data(self):
         if self.map_data_storage is None or self.map_info_storage is None:
             self.get_logger().warn("Cannot inflate map, map_data_storage or map_info_storage is None.")
             return
-        inflation_source_threshold = 50  # Cells with value 50 or more will be inflated. Tune as needed.
-                                         # Common values are 0 (everything not certainly free) to 65.
         
-        # Create a binary mask: 1 if the cell should be a source for inflation, 0 otherwise.
-        source_for_inflation_mask = np.logical_or(
-            self.map_data_storage >= inflation_source_threshold,
-            self.map_data_storage == -1  # Treat unknown cells as obstacles for inflation
-        ).astype(np.uint8)
-        # --- MODIFICATION END ---
+        # Treat cells with high probability of being occupied (e.g., >= 90) as obstacles for inflation
+        occupied_mask = (self.map_data_storage >= 90).astype(np.uint8)
         
-        inflation_radius_meters = 0.25  # This is your current robot radius + safety margin.
-
+        inflation_radius_meters = 0.27 # Define robot radius + safety margin
         if self.map_info_storage.resolution == 0:
             self.get_logger().error("Map resolution is zero, cannot calculate inflation radius in cells.")
             return
-        inflation_radius_cells = math.ceil(inflation_radius_meters / self.map_info_storage.resolution)
         
+        inflation_radius_cells = math.ceil(inflation_radius_meters / self.map_info_storage.resolution)
+        # Kernel size must be odd for maximum_filter symmetric behavior
         inflation_kernel_size = 2 * inflation_radius_cells + 1
-        if inflation_kernel_size < 1: # Should not happen if radius_cells > 0
-            inflation_kernel_size = 1
-
-        dilated_obstacle_mask = maximum_filter(source_for_inflation_mask, size=inflation_kernel_size)
+        # Use maximum_filter to expand occupied regions
+        inflated_regions_mask = maximum_filter(occupied_mask, size=inflation_kernel_size)
         
         self.inflated_map_storage = self.map_data_storage.copy()
+        # Mark inflated areas as occupied (e.g., 100), but only where inflated_regions_mask is true.
+        # This ensures we don't turn free space (0) into occupied (100) unless it's truly part of an inflation zone.
+        # Also, don't overwrite unknown (-1) unless it's being inflated from a known obstacle.
+        self.inflated_map_storage[inflated_regions_mask > 0] = 100 
         
-        # Where the dilated_obstacle_mask is 1 (true), set the cell value in inflated_map_storage to 100.
-        # This ensures that all inflated regions (including original sources) are marked as definitely occupied.
-        self.inflated_map_storage[dilated_obstacle_mask == 1] = 100
-        
-        if self.inflated_map_pub.get_subscription_count() > 0 or True: 
-            try:
-                inflated_grid_msg = OccupancyGrid()
-                inflated_grid_msg.header.stamp = self.get_clock().now().to_msg()
-                inflated_grid_msg.header.frame_id = self.map_tf_frame 
-                inflated_grid_msg.info = self.map_info_storage
-                inflated_map_data_flat = self.inflated_map_storage.flatten().astype(np.int8).tolist()
-                inflated_grid_msg.data = inflated_map_data_flat
-                
-                self.inflated_map_pub.publish(inflated_grid_msg)
-                self.get_logger().debug("Published inflated map.", throttle_duration_sec=2.0)
-            except Exception as e:
-                self.get_logger().error(f"Error publishing inflated map: {e}")
 
     def goal_callback(self, msg: PoseStamped):
         self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
         
-        self.replanning_attempts = 0 # Reset for a new goal
-        self.obstacle_avoidance_state = ObstacleAvoidanceState.NORMAL # Reset avoidance state for new goal
-        self.reset_bumper_flags() # Clear any lingering bumper flags
+        # Reset relevant states for a new goal
+        self.current_path = [] # Clear previous path
 
+        transformed_goal_pose = msg.pose # Default to using the pose directly if already in map frame
         if msg.header.frame_id != self.map_tf_frame:
             self.get_logger().warn(f"Goal is in frame '{msg.header.frame_id}'. Attempting to transform to '{self.map_tf_frame}'.")
             try:
-                self.tf_buffer.can_transform(self.map_tf_frame, msg.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
-                transformed_goal_pose_stamped = self.tf_buffer.transform(msg, self.map_tf_frame, timeout=rclpy.duration.Duration(seconds=1.0))
-                self.current_goal_pose = transformed_goal_pose_stamped.pose
-                self.get_logger().info(f"Goal transformed to '{self.map_tf_frame}': Pos(x={self.current_goal_pose.position.x:.2f}, y={self.current_goal_pose.position.y:.2f})")
+                # Ensure TF buffer can transform and then perform the transform
+                # Use a timeout for can_transform as well, though lookup_transform will also timeout
+                self.tf_buffer.can_transform(self.map_tf_frame, msg.header.frame_id, rclpy.time.Time(seconds=0), timeout=rclpy.duration.Duration(seconds=1.0))
+                transformed_goal_stamped = self.tf_buffer.transform(msg, self.map_tf_frame, timeout=rclpy.duration.Duration(seconds=1.0))
+                transformed_goal_pose = transformed_goal_stamped.pose
+                self.get_logger().info(f"Goal transformed to '{self.map_tf_frame}': Pos(x={transformed_goal_pose.position.x:.2f}, y={transformed_goal_pose.position.y:.2f})")
             except Exception as e:
-                self.get_logger().error(f"Failed to transform goal: {e}")
-                self.current_goal_pose = None
+                self.get_logger().error(f"Failed to transform goal from '{msg.header.frame_id}' to '{self.map_tf_frame}': {e}")
+                self.current_goal_pose = None # Invalidate goal
                 self.current_path = []
+                self.publish_path_markers() # Clear markers
                 return
-        else:
-            self.current_goal_pose = msg.pose
-
+        
+        self.current_goal_pose = transformed_goal_pose # Store geometry_msgs/Pose
         self.plan_new_path()
 
     def world_to_map_grid(self, world_x, world_y):
-        if self.map_info_storage is None: return None, None
-        origin = self.map_info_storage.origin.position
+        if self.map_info_storage is None: 
+            self.get_logger().error("world_to_map_grid: map_info_storage is None.")
+            return None, None
+        origin_x = self.map_info_storage.origin.position.x
+        origin_y = self.map_info_storage.origin.position.y
         res = self.map_info_storage.resolution
-        if res == 0: return None, None
-        grid_x = int((world_x - origin.x) / res)
-        grid_y = int((world_y - origin.y) / res)
+        if res == 0: 
+            self.get_logger().error("world_to_map_grid: map resolution is zero.")
+            return None, None
+        grid_x = int((world_x - origin_x) / res)
+        grid_y = int((world_y - origin_y) / res)
         return grid_x, grid_y
 
     def map_grid_to_world(self, grid_x, grid_y):
-        if self.map_info_storage is None: return None, None
-        origin = self.map_info_storage.origin.position
+        if self.map_info_storage is None: 
+            self.get_logger().error("map_grid_to_world: map_info_storage is None.")
+            return None, None
+        origin_x = self.map_info_storage.origin.position.x
+        origin_y = self.map_info_storage.origin.position.y
         res = self.map_info_storage.resolution
-        world_x = grid_x * res + origin.x + res / 2.0
-        world_y = grid_y * res + origin.y + res / 2.0
+        # Calculate center of the grid cell
+        world_x = grid_x * res + origin_x + res / 2.0
+        world_y = grid_y * res + origin_y + res / 2.0
         return world_x, world_y
 
     def is_grid_cell_occupied(self, grid_x, grid_y):
         if self.inflated_map_storage is None:
             self.get_logger().warn("is_grid_cell_occupied: Inflated map is None, assuming occupied.", throttle_duration_sec=5.0)
-            return True 
+            return True # Safety: assume occupied if map not available
+        
         height, width = self.inflated_map_storage.shape
         if 0 <= grid_y < height and 0 <= grid_x < width:
             cell_value = self.inflated_map_storage[grid_y, grid_x]
-            return cell_value >= 95 or cell_value == -1 # Treat 90-100 (occupied/inflated) and -1 (unknown) as obstacles
-        return True # Out of bounds is occupied
+            # Occupied if value is high (e.g., >=90, indicating obstacle or inflated region)
+            # or if value is -1 (unknown space, treat as occupied for safety)
+            return cell_value >= 90 or cell_value == -1 
+        self.get_logger().debug(f"is_grid_cell_occupied: Cell ({grid_x}, {grid_y}) is out of map bounds ({width}x{height}). Assuming occupied.", throttle_duration_sec=5.0)
+        return True # Out of bounds is treated as occupied
 
-    def get_a_star_heuristic(self, pos_a, pos_b):
-        return np.hypot(pos_a[0] - pos_b[0], pos_a[1] - pos_b[1])
+    def get_a_star_heuristic(self, pos_a_grid, pos_b_grid):
+        """Euclidean distance heuristic for A*."""
+        return np.hypot(pos_a_grid[0] - pos_b_grid[0], pos_a_grid[1] - pos_b_grid[1])
 
-    def find_nearest_free_grid_cell(self, goal_grid_xy, max_radius_cells=30):
-        if goal_grid_xy[0] is None or goal_grid_xy[1] is None:
-            self.get_logger().error("find_nearest_free_grid_cell: Invalid goal_grid_xy input.")
+    def find_nearest_free_grid_cell(self, center_grid_xy, max_radius_cells=30):
+        if center_grid_xy[0] is None or center_grid_xy[1] is None:
+            self.get_logger().error("find_nearest_free_grid_cell: Invalid center_grid_xy input (None).")
             return None
-        gx, gy = goal_grid_xy
-        if not self.is_grid_cell_occupied(gx, gy): return gx, gy
+        
+        gx, gy = center_grid_xy
+        if not self.is_grid_cell_occupied(gx, gy):
+            self.get_logger().debug(f"Cell ({gx}, {gy}) is already free.")
+            return gx, gy # Already free
 
         self.get_logger().info(f"Searching for free cell near ({gx}, {gy}) within radius {max_radius_cells}")
         for r in range(1, max_radius_cells + 1):
+            # Iterate over cells on the perimeter of a square of radius r
             for dx_offset in range(-r, r + 1):
-                for dy_offset in range(-r, r + 1):
-                    if abs(dx_offset) == r or abs(dy_offset) == r: # Check perimeter
-                        check_x, check_y = gx + dx_offset, gy + dy_offset
-                        if not self.is_grid_cell_occupied(check_x, check_y):
-                            self.get_logger().info(f"Found free cell ({check_x}, {check_y}) at radius {r}")
-                            return check_x, check_y
-        self.get_logger().warn(f"No free cell found within {max_radius_cells} cells of goal ({gx}, {gy})")
+                for dy_offset in [-r, r] if abs(dx_offset) != r else range(-r, r + 1): # Avoid double-checking corners
+                    if dx_offset == 0 and dy_offset == 0: continue # Skip center
+
+                    check_x, check_y = gx + dx_offset, gy + dy_offset
+                    if not self.is_grid_cell_occupied(check_x, check_y):
+                        self.get_logger().info(f"Found free cell ({check_x}, {check_y}) at radius {r} (offset {dx_offset},{dy_offset}) from ({gx},{gy}).")
+                        return check_x, check_y
+        
+        self.get_logger().warn(f"No free cell found within {max_radius_cells} cells of ({gx}, {gy}).")
         return None
 
     def a_star_planner(self, start_grid_xy, goal_grid_xy):
-        if start_grid_xy[0] is None or goal_grid_xy[0] is None:
-            self.get_logger().error("A*: Start or goal grid coordinates are None.")
+        self.get_logger().info(f"A* attempting to plan from {start_grid_xy} to {goal_grid_xy}")
+        if start_grid_xy[0] is None or start_grid_xy[1] is None or \
+           goal_grid_xy[0] is None or goal_grid_xy[1] is None:
+            self.get_logger().error("A*: Start or goal grid coordinates are None. Cannot plan.")
             return None
         
+        # Handle if start position is occupied (e.g., due to map updates or inflation)
+        effective_start_grid_xy = start_grid_xy
         if self.is_grid_cell_occupied(start_grid_xy[0], start_grid_xy[1]):
-            self.get_logger().error(f"A*: Start position {start_grid_xy} is occupied! Cannot plan.")
-            # Attempt to find a nearby free cell for start
-            new_start = self.find_nearest_free_grid_cell(start_grid_xy, max_radius_cells=5)
+            self.get_logger().warn(f"A*: Original start position {start_grid_xy} is occupied! Finding nearest free cell.")
+            new_start = self.find_nearest_free_grid_cell(start_grid_xy, max_radius_cells=5) # Small radius for start
             if new_start is None:
                 self.get_logger().error("A*: Could not find a free cell near occupied start. Planning failed.")
                 return None
-            self.get_logger().warn(f"A*: Original start occupied, using new start {new_start}")
-            start_grid_xy = new_start
+            self.get_logger().warn(f"A*: Using new start {new_start} instead of {start_grid_xy}.")
+            effective_start_grid_xy = new_start
             
-        self.get_logger().info(f"A* planning from {start_grid_xy} to {goal_grid_xy}")
-        open_set = []
-        heapq.heappush(open_set, (0, start_grid_xy))
-        came_from = {}
-        g_score = {start_grid_xy: 0}
-        f_score = {start_grid_xy: self.get_a_star_heuristic(start_grid_xy, goal_grid_xy)}
+        self.get_logger().info(f"A* effective planning from {effective_start_grid_xy} to {goal_grid_xy}")
+
+        open_set_pq = []  # Priority queue (min-heap) storing (f_score, node_xy)
+        heapq.heappush(open_set_pq, (0 + self.get_a_star_heuristic(effective_start_grid_xy, goal_grid_xy), effective_start_grid_xy))
         
-        nodes_explored = 0
-        max_nodes = 30000
+        came_from = {}  # Stores parent of a node in the path: {node_xy: parent_node_xy}
+        g_score = {effective_start_grid_xy: 0}  # Cost from start to node_xy
 
-        while open_set and nodes_explored < max_nodes:
-            _, current_grid_xy = heapq.heappop(open_set)
-            nodes_explored += 1
+        nodes_explored_count = 0
+        
+        # 8-way movement: (dx, dy)
+        movements = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
 
-            if current_grid_xy == goal_grid_xy:
+        while open_set_pq and nodes_explored_count < self.a_star_max_nodes:
+            current_f_val, current_node_xy = heapq.heappop(open_set_pq)
+            nodes_explored_count += 1
+
+            # Optimization: If we re-added a node to open_set_pq with a higher f_score (shouldn't happen with correct g_score check),
+            # and it's popped later, its g_score would be higher than the already processed one.
+            # However, a simple check if g_score for current_node_xy is worse than current_f_val - heuristic can also work.
+            # For simplicity, we rely on the g_score check before adding to ensure only better paths are considered.
+
+            if current_node_xy == goal_grid_xy:
+                # Goal reached, reconstruct path
                 path_reconstructed = []
-                temp_xy = current_grid_xy
+                temp_xy = goal_grid_xy
                 while temp_xy in came_from:
                     path_reconstructed.append(temp_xy)
                     temp_xy = came_from[temp_xy]
-                path_reconstructed.append(start_grid_xy)
-                self.get_logger().info(f"A* found path with {len(path_reconstructed)} waypoints ({nodes_explored} nodes).")
+                path_reconstructed.append(effective_start_grid_xy) # Add start node
+                self.get_logger().info(f"A* found path with {len(path_reconstructed)} waypoints after exploring {nodes_explored_count} nodes.")
                 return list(reversed(path_reconstructed))
 
-            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
-                neighbor_grid_xy = (current_grid_xy[0] + dx, current_grid_xy[1] + dy)
-                if self.is_grid_cell_occupied(neighbor_grid_xy[0], neighbor_grid_xy[1]):
-                    continue
-                movement_cost = np.hypot(dx, dy)
-                tentative_g_val = g_score[current_grid_xy] + movement_cost
-                if tentative_g_val < g_score.get(neighbor_grid_xy, float('inf')):
-                    came_from[neighbor_grid_xy] = current_grid_xy
-                    g_score[neighbor_grid_xy] = tentative_g_val
-                    f_val = tentative_g_val + self.get_a_star_heuristic(neighbor_grid_xy, goal_grid_xy)
-                    if neighbor_grid_xy not in [item[1] for item in open_set]: # Avoid duplicates, or update priority
-                         heapq.heappush(open_set, (f_val, neighbor_grid_xy))
+            for dx, dy in movements:
+                neighbor_node_xy = (current_node_xy[0] + dx, current_node_xy[1] + dy)
+                
+                if self.is_grid_cell_occupied(neighbor_node_xy[0], neighbor_node_xy[1]):
+                    continue # Skip occupied or out-of-bounds neighbors
+                
+                # Cost to move from current_node_xy to neighbor_node_xy (1 for cardinal, sqrt(2) for diagonal)
+                movement_cost = np.hypot(dx, dy) 
+                
+                # g_score for current_node_xy should always exist if it was popped from open_set_pq
+                tentative_g_val_for_neighbor = g_score[current_node_xy] + movement_cost
+
+                if tentative_g_val_for_neighbor < g_score.get(neighbor_node_xy, float('inf')):
+                    # This path to neighbor is better than any previously found. Record it.
+                    came_from[neighbor_node_xy] = current_node_xy
+                    g_score[neighbor_node_xy] = tentative_g_val_for_neighbor
+                    
+                    heuristic_val_for_neighbor = self.get_a_star_heuristic(neighbor_node_xy, goal_grid_xy)
+                    f_val_for_neighbor = tentative_g_val_for_neighbor + heuristic_val_for_neighbor
+                    
+                    heapq.heappush(open_set_pq, (f_val_for_neighbor, neighbor_node_xy))
         
-        self.get_logger().warn(f"A* failed to find path after exploring {nodes_explored} nodes.")
+        # If loop finishes, path not found or max nodes limit reached
+        if nodes_explored_count >= self.a_star_max_nodes:
+            self.get_logger().warn(f"A* failed: Reached max_nodes limit ({self.a_star_max_nodes}) after exploring {nodes_explored_count} nodes. Goal {goal_grid_xy} not reached.")
+        else: # open_set_pq is empty
+            self.get_logger().warn(f"A* failed: Open set became empty after exploring {nodes_explored_count} nodes. Goal {goal_grid_xy} not reached.")
         return None
 
-    def smooth_path(self, path, min_distance_sq=0.09): # min_distance=0.3m, so 0.3^2
-        if not path or len(path) < 2:
-            return path
-        smoothed = [path[0]]
-        for i in range(1, len(path) -1): # Exclude last point from this part of loop
-            current = path[i]
-            last_kept = smoothed[-1]
-            dx = current[0] - last_kept[0]
-            dy = current[1] - last_kept[1]
-            if (dx*dx + dy*dy) >= min_distance_sq:
-                smoothed.append(current)
-        smoothed.append(path[-1]) # Always add last point
-        self.get_logger().info(f"Path smoothed from {len(path)} to {len(smoothed)} waypoints.")
-        return smoothed
-
-    def get_lookahead_point(self, robot_x, robot_y, lookahead_dist):
-        if not self.current_path: return robot_x, robot_y
+    def smooth_path(self, path_grid_coords, min_dist_sq_world=0.09): # min_dist_world=0.3m
+        if not path_grid_coords or len(path_grid_coords) < 2:
+            return path_grid_coords # No smoothing needed for short or empty paths
         
+        # Convert grid path to world coordinates first for distance check
+        path_world_coords = []
+        for gx, gy in path_grid_coords:
+            wx, wy = self.map_grid_to_world(gx, gy)
+            if wx is not None and wy is not None:
+                path_world_coords.append((wx, wy))
+            else:
+                self.get_logger().warn(f"smooth_path: Failed to convert grid {gx},{gy} to world. Skipping point.")
+        
+        if len(path_world_coords) < 2:
+            return path_world_coords # Return original (possibly truncated) if conversion failed badly
+
+        smoothed_world_path = [path_world_coords[0]]
+        for i in range(1, len(path_world_coords) - 1): # Iterate up to second to last point
+            current_wp_world = path_world_coords[i]
+            last_kept_wp_world = smoothed_world_path[-1]
+            
+            dx_world = current_wp_world[0] - last_kept_wp_world[0]
+            dy_world = current_wp_world[1] - last_kept_wp_world[1]
+            dist_sq_world = dx_world*dx_world + dy_world*dy_world
+            
+            if dist_sq_world >= min_dist_sq_world:
+                smoothed_world_path.append(current_wp_world)
+        
+        smoothed_world_path.append(path_world_coords[-1]) # Always add the last point
+        
+        self.get_logger().info(f"Path smoothed from {len(path_world_coords)} to {len(smoothed_world_path)} world waypoints.")
+        return smoothed_world_path
+
+
+    def get_lookahead_point(self, robot_x_world, robot_y_world, lookahead_dist_world):
+        if not self.current_path: # current_path stores world coordinates
+            self.get_logger().debug("get_lookahead_point: No current path available.", throttle_duration_sec=5.0)
+            return robot_x_world, robot_y_world # Return current robot position if no path
+
         closest_idx = 0
-        min_dist_sq = float('inf')
-        for i, (wx, wy) in enumerate(self.current_path):
-            dist_sq = (wx - robot_x)**2 + (wy - robot_y)**2
-            if dist_sq < min_dist_sq:
-                min_dist_sq = dist_sq
+        min_dist_sq_to_path = float('inf')
+
+        # Find the closest point on the path to the robot
+        for i, (wp_x, wp_y) in enumerate(self.current_path):
+            dist_sq = (wp_x - robot_x_world)**2 + (wp_y - robot_y_world)**2
+            if dist_sq < min_dist_sq_to_path:
+                min_dist_sq_to_path = dist_sq
                 closest_idx = i
         
+        # Starting from the closest point, find a point on the path at lookahead_dist_world
         accumulated_dist = 0.0
+        # Project robot onto the segment starting from closest_idx might be more robust
+        # For now, simpler: advance along path from closest_idx
+        
         for i in range(closest_idx, len(self.current_path)):
-            if i == len(self.current_path) - 1: return self.current_path[i]
-            current_wp = self.current_path[i]
-            next_wp = self.current_path[i + 1]
-            segment_dist = np.hypot(next_wp[0] - current_wp[0], next_wp[1] - current_wp[1])
+            if i == len(self.current_path) - 1: # If this is the last waypoint
+                return self.current_path[i] # Target the last waypoint
+
+            current_wp_world = self.current_path[i]
+            next_wp_world = self.current_path[i+1]
             
-            if segment_dist < 1e-6: # Skip zero-length segments
+            segment_dx = next_wp_world[0] - current_wp_world[0]
+            segment_dy = next_wp_world[1] - current_wp_world[1]
+            segment_dist = np.hypot(segment_dx, segment_dy)
+            
+            if segment_dist < 1e-6: # Avoid division by zero for zero-length segments
                 continue
 
-            if accumulated_dist + segment_dist >= lookahead_dist:
-                remaining_dist = lookahead_dist - accumulated_dist
-                ratio = remaining_dist / segment_dist
-                x = current_wp[0] + ratio * (next_wp[0] - current_wp[0])
-                y = current_wp[1] + ratio * (next_wp[1] - current_wp[1])
-                return x, y
+            # If the robot is effectively "on" this segment or past it (relevant to accumulated_dist)
+            # and the lookahead point falls within this segment
+            if accumulated_dist + segment_dist >= lookahead_dist_world:
+                remaining_dist_on_segment = lookahead_dist_world - accumulated_dist
+                ratio = remaining_dist_on_segment / segment_dist
+                lookahead_x = current_wp_world[0] + ratio * segment_dx
+                lookahead_y = current_wp_world[1] + ratio * segment_dy
+                return lookahead_x, lookahead_y
+            
             accumulated_dist += segment_dist
+            
+        # If lookahead distance is beyond the end of the path from closest_idx, target the last waypoint
         return self.current_path[-1]
 
-    def cleanup_passed_waypoints(self, robot_x, robot_y, threshold_sq): # Use squared threshold
+
+    def cleanup_passed_waypoints(self, robot_x_world, robot_y_world, arrival_threshold_sq_world):
+        """Removes waypoints from the front of self.current_path if the robot is close enough."""
         while self.current_path:
-            wp_x, wp_y = self.current_path[0]
-            dist_sq = (wp_x - robot_x)**2 + (wp_y - robot_y)**2
-            if dist_sq < threshold_sq:
+            wp_x, wp_y = self.current_path[0] # First waypoint in world coordinates
+            dist_sq_to_wp = (wp_x - robot_x_world)**2 + (wp_y - robot_y_world)**2
+            if dist_sq_to_wp < arrival_threshold_sq_world:
                 self.current_path.pop(0)
-                # self.get_logger().debug(f"Removed close waypoint. {len(self.current_path)} remaining.")
+                self.get_logger().debug(f"Removed passed waypoint. {len(self.current_path)} remaining.")
             else:
-                break
+                break # First waypoint is still ahead / not yet reached
 
     def plan_new_path(self):
         if self.map_data_storage is None or self.current_goal_pose is None or self.map_info_storage is None:
-            self.get_logger().warn("Cannot plan path: Missing map, goal, or map info.")
+            self.get_logger().warn("Cannot plan new path: Missing map, goal, or map info.")
             self.current_path = []
+            self.publish_path_markers() # Clear markers
             return
 
-        current_robot_pos_world = None
-        source_frames_to_try = [self.robot_base_footprint_tf_frame, self.robot_base_link_tf_frame]
-        for source_frame_id in source_frames_to_try:
-            try:
-                transform_stamped = self.tf_buffer.lookup_transform(
-                    self.map_tf_frame, source_frame_id, rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.2)
-                )
-                current_robot_pos_world = (transform_stamped.transform.translation.x, transform_stamped.transform.translation.y)
-                break
-            except Exception as e:
-                self.get_logger().debug(f"TF lookup failed for planning ('{self.map_tf_frame}' <- '{source_frame_id}'): {e}")
+        current_robot_state = self.get_current_robot_pose_in_map()
+        if current_robot_state is None:
+            self.get_logger().warn("Cannot plan new path: Failed to get current robot pose in map.")
+            self.current_path = []
+            self.publish_path_markers() # Clear markers
+            return
         
-        if current_robot_pos_world is None:
-            self.get_logger().warn("All TF lookups failed for robot's current pose. Cannot plan path.")
-            self.current_path = []
-            return
-
+        current_robot_pos_world = (current_robot_state['x'], current_robot_state['y'])
         start_grid_xy = self.world_to_map_grid(current_robot_pos_world[0], current_robot_pos_world[1])
+        
         goal_world_xy = (self.current_goal_pose.position.x, self.current_goal_pose.position.y)
         goal_grid_xy_orig = self.world_to_map_grid(goal_world_xy[0], goal_world_xy[1])
         
-        if start_grid_xy[0] is None or goal_grid_xy_orig[0] is None:
-            self.get_logger().warn("Failed to convert world start/goal to map grid.")
+        if start_grid_xy[0] is None or start_grid_xy[1] is None or \
+           goal_grid_xy_orig[0] is None or goal_grid_xy_orig[1] is None:
+            self.get_logger().warn("Failed to convert world start/goal to map grid coordinates.")
             self.current_path = []
+            self.publish_path_markers()
             return
         
-        goal_grid_xy = goal_grid_xy_orig
-        if self.is_grid_cell_occupied(goal_grid_xy[0], goal_grid_xy[1]):
-            self.get_logger().warn(f"Original goal grid cell {goal_grid_xy} is occupied. Finding nearest free cell.")
-            effective_goal_grid_xy = self.find_nearest_free_grid_cell(goal_grid_xy)
-            if effective_goal_grid_xy is None:
-                self.get_logger().warn("No free cell found near goal. Path planning aborted.")
+        # Ensure goal grid cell is free, find nearest if not
+        effective_goal_grid_xy = goal_grid_xy_orig
+        if self.is_grid_cell_occupied(goal_grid_xy_orig[0], goal_grid_xy_orig[1]):
+            self.get_logger().warn(f"Original goal grid cell {goal_grid_xy_orig} is occupied. Finding nearest free cell.")
+            found_free_goal_grid = self.find_nearest_free_grid_cell(goal_grid_xy_orig, max_radius_cells=30)
+            if found_free_goal_grid is None:
+                self.get_logger().error("No free cell found near goal. Path planning aborted.")
                 self.current_path = []
+                self.publish_path_markers()
                 return
-            goal_grid_xy = effective_goal_grid_xy
+            effective_goal_grid_xy = found_free_goal_grid
+            self.get_logger().info(f"Using effective goal grid {effective_goal_grid_xy} instead of {goal_grid_xy_orig}.")
 
-        self.get_logger().info(f"Planning path from grid {start_grid_xy} to effective grid {goal_grid_xy}")
-        grid_path = self.a_star_planner(start_grid_xy, goal_grid_xy)
+        # A* planner returns a path in grid coordinates
+        grid_path = self.a_star_planner(start_grid_xy, effective_goal_grid_xy)
         
         if grid_path:
-            self.current_path = [(self.map_grid_to_world(gx, gy)) for gx, gy in grid_path if self.map_grid_to_world(gx, gy)[0] is not None]
+            # Smooth path (which also converts to world coordinates)
+            self.current_path = self.smooth_path(grid_path) # self.current_path is now in world_coords
             if self.current_path:
-                self.current_path = self.smooth_path(self.current_path) # Use squared distance in smooth_path
-                self.publish_path_markers()
-                self.get_logger().info(f"Path planned with {len(self.current_path)} smoothed waypoints.")
+                self.get_logger().info(f"Path planned with {len(self.current_path)} smoothed world waypoints.")
             else:
-                self.get_logger().warn("A* found grid path, but world conversion failed or path empty.")
+                self.get_logger().warn("A* found grid path, but smoothing/world conversion resulted in empty path.")
         else:
-            self.get_logger().warn("A* planner failed to find a path.")
+            self.get_logger().warn("A* planner failed to find a path. No path generated.")
             self.current_path = []
+        
+        self.publish_path_markers() # Publish new path (or clear markers if path failed)
+
 
     def publish_path_markers(self):
-        if not rclpy.ok(): return # Don't try to publish if shutting down
+        if not rclpy.ok(): 
+            self.get_logger().warn("publish_path_markers: RCLPY not OK, skipping publish.", throttle_duration_sec=5.0)
+            return 
+            
         marker_array = MarkerArray()
-        header = Header(stamp=self.get_clock().now().to_msg(), frame_id=self.map_tf_frame)
+        # Use a fixed timestamp for all markers in this array for consistency
+        now_msg = self.get_clock().now().to_msg()
+        header = Header(stamp=now_msg, frame_id=self.map_tf_frame)
 
-        delete_all_marker = Marker(header=header, ns=f"path_waypoints_{self.robot_namespace}", id=0, action=Marker.DELETEALL)
+        # Marker to delete all previous markers in this namespace
+        delete_all_marker = Marker(
+            header=header, 
+            ns=f"path_waypoints_{self.robot_namespace}", 
+            id=0, # Special ID for DELETEALL
+            type=Marker.SPHERE, # Type doesn't matter much for DELETEALL but must be valid
+            action=Marker.DELETEALL
+        )
         marker_array.markers.append(delete_all_marker)
         
-        for i, (world_x, world_y) in enumerate(self.current_path):
+        # Add new markers for the current path (if any)
+        for i, (world_x, world_y) in enumerate(self.current_path): # current_path is in world coordinates
             marker = Marker(
-                header=header, ns=f"path_waypoints_{self.robot_namespace}", id=i + 1,
-                type=Marker.SPHERE, action=Marker.ADD,
-                pose=PoseStamped(header=header, pose=PoseStamped().pose).pose # Initialize pose
+                header=header, 
+                ns=f"path_waypoints_{self.robot_namespace}", 
+                id=i + 1, # Unique ID for each marker, starting from 1
+                type=Marker.SPHERE, 
+                action=Marker.ADD
             )
+            # Set marker pose
+            marker.pose = Pose() # Create a new Pose object
             marker.pose.position.x = world_x
             marker.pose.position.y = world_y
-            marker.pose.position.z = 0.1
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = 0.1; marker.scale.y = 0.1; marker.scale.z = 0.1;
+            marker.pose.position.z = 0.1 # Slightly above ground for visibility
+            marker.pose.orientation.w = 1.0 # Default orientation
+
+            # Set marker scale
+            marker.scale.x = 0.1
+            marker.scale.y = 0.1
+            marker.scale.z = 0.1
             
-            if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
-                marker.color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.8) # Orange
-            else:
-                marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.8) # Green
+            # Set marker color (always green now, as obstacle avoidance FSM is removed)
+            marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.8) # Green
                 
-            marker.lifetime = rclpy.duration.Duration(seconds=15).to_msg() # Shorter lifetime
+            marker.lifetime = rclpy.duration.Duration(seconds=15).to_msg() # How long marker persists if not updated
             marker_array.markers.append(marker)
         
         if self.marker_pub.get_subscription_count() > 0:
             self.marker_pub.publish(marker_array)
+        elif not self.current_path: # If path is empty, still try to publish delete_all
+             self.marker_pub.publish(marker_array)
+
 
     def path_following_update(self):
-        # self.get_logger().debug(f"Path Following Update: State={self.obstacle_avoidance_state.value}", throttle_duration_sec=1.0)
-        if self.obstacle_avoidance_state != ObstacleAvoidanceState.NORMAL:
-            cmd = self.execute_obstacle_avoidance()
-            self.cmd_pub.publish(cmd)
-            self.publish_path_markers() # Update marker color during avoidance
+        # Obstacle avoidance FSM removed. Path following is always "normal".
+        # The scan_callback handles emergency stops by clearing the path.
+
+        if not self.current_path: # No path to follow
+            # If no path, ensure robot is stopped (e.g., after completion or if planning failed)
+            # Check if last command was non-zero to avoid spamming stop commands.
+            # For now, a simple stop if no path.
+            # self.cmd_pub.publish(Twist()) # Consider if this spams too much.
             return
 
-        if not self.current_path:
-            # If no path, but we are in NORMAL state, ensure robot is stopped
-            # This can happen if a goal was cleared or planning failed.
-            # Only publish if not already stopped to avoid spamming.
-            # (Better: check if last command was non-zero)
-            # self.cmd_pub.publish(Twist()) # Simplistic stop
+        current_robot_state = self.get_current_robot_pose_in_map()
+        if current_robot_state is None:
+            self.get_logger().warn("Path following: TF lookup failed. Sending zero velocity.", throttle_duration_sec=2.0)
+            self.cmd_pub.publish(Twist()) # Stop if pose is unknown
             return
 
-        current_robot_pos_world = None
-        current_robot_yaw_world = None
-        source_frames_to_try = [self.robot_base_footprint_tf_frame, self.robot_base_link_tf_frame]
-        for source_frame_id in source_frames_to_try:
-            try:
-                transform_stamped = self.tf_buffer.lookup_transform(
-                    self.map_tf_frame, source_frame_id, rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.05)
-                )
-                current_robot_pos_world = (transform_stamped.transform.translation.x, transform_stamped.transform.translation.y)
-                current_robot_yaw_world = self.quaternion_to_yaw(transform_stamped.transform.rotation)
-                break
-            except Exception as e:
-                self.get_logger().debug(f"TF lookup failed for update ('{self.map_tf_frame}' <- '{source_frame_id}'): {e}", throttle_duration_sec=2.0)
+        robot_x_world, robot_y_world = current_robot_state['x'], current_robot_state['y']
+        robot_yaw_world = current_robot_state['yaw']
         
-        if current_robot_pos_world is None or current_robot_yaw_world is None:
-            self.get_logger().warn("TF lookup failed in path following. Sending zero velocity.", throttle_duration_sec=2.0)
-            self.cmd_pub.publish(Twist())
-            return
-
-        robot_x, robot_y = current_robot_pos_world
+        # Check if close to waypoints and remove them
+        arrival_threshold_at_waypoint = 0.20  # meters
+        self.cleanup_passed_waypoints(robot_x_world, robot_y_world, arrival_threshold_at_waypoint**2)
         
-        arrival_threshold = 0.20  # meters
-        arrival_threshold_sq = arrival_threshold**2
-        self.cleanup_passed_waypoints(robot_x, robot_y, arrival_threshold_sq) # Use squared
-        
-        if not self.current_path:
-            self.get_logger().info("Path successfully completed or cleared! Stopping.")
+        if not self.current_path: # Path might have been completed after cleanup
+            self.get_logger().info("Path successfully completed or cleared by cleanup! Stopping.")
             self.cmd_pub.publish(Twist())
             self.current_goal_pose = None # Clear goal as path is done
+            self.publish_path_markers() # Update markers to show no path
             return
 
-        lookahead_distance = 0.4
-        target_wp_x, target_wp_y = self.get_lookahead_point(robot_x, robot_y, lookahead_distance)
+        # Pure Pursuit-like lookahead point
+        lookahead_distance = 0.4 # meters
+        target_wp_x_world, target_wp_y_world = self.get_lookahead_point(robot_x_world, robot_y_world, lookahead_distance)
         
-        error_x = target_wp_x - robot_x
-        error_y = target_wp_y - robot_y
-        # distance_to_wp = np.hypot(error_x, error_y) # Not strictly needed if using lookahead point primarily for angle
-
+        # Calculate errors to the lookahead point
+        error_x_world = target_wp_x_world - robot_x_world
+        error_y_world = target_wp_y_world - robot_y_world
+        
         cmd = Twist()
-        angle_to_wp = math.atan2(error_y, error_x)
-        heading_error = angle_to_wp - current_robot_yaw_world
+        angle_to_lookahead_point = math.atan2(error_y_world, error_x_world)
+        heading_error = angle_to_lookahead_point - robot_yaw_world
+        
+        # Normalize heading error to [-pi, pi]
         while heading_error > math.pi: heading_error -= 2 * math.pi
         while heading_error < -math.pi: heading_error += 2 * math.pi
 
-        k_angular = 0.8
-        k_linear = 0.4 
-        max_lin_vel = 0.22 # Max linear velocity for TB4
-        max_ang_vel = 0.8  # Max angular velocity for TB4 (can be up to 1.9 for Create3)
+        # --- Proportional Control Parameters ---
+        k_angular = 0.8  # Proportional gain for angular velocity
+        k_linear = 0.5   # Proportional gain for linear velocity (can also be fixed max)
+        max_linear_vel = 0.22 # Max linear velocity (m/s) for TurtleBot4/Create3
+        max_angular_vel = 1.0 # Max angular velocity (rad/s) for TurtleBot4/Create3 (spec is ~1.9, but 1.0 is safer)
 
-        # Stop-and-turn thresholds
-        turn_threshold_stop_rad = math.radians(75) # If error > 75 deg, stop linear and only turn
-        turn_threshold_slow_rad = math.radians(30) # If error > 30 deg, slow down linear
+        # --- Control Logic ---
+        # Angular velocity
+        angular_deadband_rad = math.radians(2.0) # Small deadband to prevent oscillation
+        if abs(heading_error) > angular_deadband_rad:
+            cmd.angular.z = k_angular * heading_error
+        else:
+            cmd.angular.z = 0.0
+        cmd.angular.z = np.clip(cmd.angular.z, -max_angular_vel, max_angular_vel)
+
+        # Linear velocity: slow down or stop if not facing the lookahead point
+        turn_threshold_stop_rad = math.radians(75) # If heading error > 75 deg, stop linear motion and only turn
+        turn_threshold_slow_rad = math.radians(30) # If heading error > 30 deg, reduce linear speed
 
         if abs(heading_error) > turn_threshold_stop_rad:
             cmd.linear.x = 0.0
         elif abs(heading_error) > turn_threshold_slow_rad:
             # Scale linear velocity based on how far into the "slow zone" we are
-            factor = (turn_threshold_stop_rad - abs(heading_error)) / (turn_threshold_stop_rad - turn_threshold_slow_rad)
-            cmd.linear.x = max_lin_vel * factor
+            # factor = 1.0 - (abs(heading_error) - turn_threshold_slow_rad) / (turn_threshold_stop_rad - turn_threshold_slow_rad)
+            # Simpler: just reduce speed significantly
+            cmd.linear.x = max_linear_vel * 0.3 # Reduced speed
         else:
-            cmd.linear.x = max_lin_vel # Full speed if heading error is small
+            # When heading error is small, move at max speed (or k_linear * distance_to_lookahead)
+            # For simplicity, using max_linear_vel when aligned.
+            cmd.linear.x = max_linear_vel
 
-        # Angular velocity control
-        angular_deadband_rad = math.radians(3) # 3 degree deadband
-        if abs(heading_error) > angular_deadband_rad:
-            cmd.angular.z = k_angular * heading_error
-        else:
-            cmd.angular.z = 0.0
+        cmd.linear.x = np.clip(cmd.linear.x, 0.0, max_linear_vel) # Ensure non-negative and capped
 
-        # Clamp velocities
-        cmd.linear.x = max(0.0, min(cmd.linear.x, max_lin_vel)) # Ensure non-negative for forward motion
-        cmd.angular.z = max(-max_ang_vel, min(cmd.angular.z, max_ang_vel))
-
-        # If very close to the final waypoint, reduce speed further or prioritize orientation
+        # Special handling if very close to the final waypoint
         if len(self.current_path) == 1:
-            dist_to_final_sq = (self.current_path[0][0] - robot_x)**2 + (self.current_path[0][1] - robot_y)**2
-            if dist_to_final_sq < (arrival_threshold * 1.5)**2 : # If within 1.5x arrival threshold
-                cmd.linear.x *= 0.5 # Slow down significantly
-                # Could add logic here to align with goal orientation if desired
+            dist_to_final_sq = (self.current_path[0][0] - robot_x_world)**2 + \
+                               (self.current_path[0][1] - robot_y_world)**2
+            # If within 1.5 times the general arrival threshold of the *final* point
+            if dist_to_final_sq < (arrival_threshold_at_waypoint * 1.5)**2 : 
+                cmd.linear.x *= 0.5 # Slow down significantly when approaching final destination
+                # Optionally, prioritize aligning with goal orientation if current_goal_pose has one.
+                # For now, just slow down.
 
         self.cmd_pub.publish(cmd)
         self.publish_path_markers() # Update path markers regularly
@@ -813,28 +702,42 @@ def main(args=None):
     try:
         rclpy.spin(planning_node)
     except KeyboardInterrupt:
-        planning_node.get_logger().info("Keyboard interrupt, shutting down PlanningNode.")
+        planning_node.get_logger().info("Keyboard interrupt received, shutting down PlanningNode.")
     except Exception as e:
         planning_node.get_logger().error(f"Unhandled exception in spin: {e}", exc_info=True)
     finally:
-        planning_node.get_logger().info("Node shutdown sequence initiated.")
-        if hasattr(planning_node, 'cmd_pub') and planning_node.cmd_pub is not None and rclpy.ok():
+        planning_node.get_logger().info("Node shutdown sequence initiated in finally block.")
+        
+        # Attempt to publish a stop command if the node and publisher are still valid
+        if rclpy.ok() and hasattr(planning_node, 'cmd_pub') and planning_node.cmd_pub is not None:
             try:
-                if hasattr(planning_node.cmd_pub, 'handle') and planning_node.cmd_pub.handle:
+                if hasattr(planning_node.cmd_pub, 'handle') and planning_node.cmd_pub.handle: # Check if publisher is valid
                     planning_node.get_logger().info("Publishing zero velocity as part of shutdown.")
                     planning_node.cmd_pub.publish(Twist())
                 else:
-                    planning_node.get_logger().warn("cmd_pub handle is invalid during shutdown.")
+                    planning_node.get_logger().warn("cmd_pub handle is invalid during shutdown, cannot publish stop Twist.")
             except Exception as e_pub:
+                # Log with severity that won't be filtered easily if rosout is already down
+                print(f"ERROR: PlanningNode: Error publishing stop Twist on shutdown: {e_pub}")
                 planning_node.get_logger().error(f"Error publishing stop Twist on shutdown: {e_pub}")
         
+        # Destroy the node
+        # This should also trigger cleanup of resources like timers and subscriptions.
+        # The TransformListener's thread (if daemon) should exit when the main program exits,
+        # but destroying the node it's associated with should signal it to stop its executor.
         if hasattr(planning_node, 'destroy_node'):
+            planning_node.get_logger().info("Destroying PlanningNode instance...")
             planning_node.destroy_node()
-            planning_node.get_logger().info("PlanningNode destroyed.")
-        if rclpy.ok(): # Check if rclpy context is still valid
+            planning_node.get_logger().info("PlanningNode instance destroyed.")
+        
+        # Shutdown RCLPY
+        if rclpy.ok():
+            # Logger might not work reliably after rclpy.shutdown()
+            print("INFO: PlanningNode: Shutting down RCLPY context.")
             rclpy.shutdown()
-            # Logger might not work after rclpy.shutdown()
-            print("RCLPY shutdown complete.") # Use print as logger might be gone
+            print("INFO: PlanningNode: RCLPY shutdown complete.")
+        else:
+            print("INFO: PlanningNode: RCLPY context already shutdown or invalid.")
 
 if __name__ == '__main__':
     main()
