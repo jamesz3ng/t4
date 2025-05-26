@@ -42,12 +42,12 @@ class CubeDetectionNode(Node):
         )
 
         # HSV
-        self.declare_parameter("hue_min", 16, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("hue_min", 15, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("hue_max", 39, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("sat_min", 119, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("sat_max", 240, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("sat_min", 90, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("sat_max", 211, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("val_min", 123, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("val_max", 202, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("val_max", 255, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
 
         # Contour
         self.declare_parameter("min_contour_area", 500, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
@@ -57,7 +57,7 @@ class CubeDetectionNode(Node):
         # Temporal Smoothing
         self.declare_parameter("temporal_buffer_size", 4, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("min_consistent_detections", 2, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("confidence_threshold", 10.0, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE))
+        self.declare_parameter("confidence_threshold", 30.0, descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE))
 
         # Debug Display Parameters
         self.declare_parameter("publish_debug_image", True, ParameterDescriptor(type=ParameterType.PARAMETER_BOOL))
