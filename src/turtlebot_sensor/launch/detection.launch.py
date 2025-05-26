@@ -77,7 +77,7 @@ def generate_launch_description():
         # Cube detection node with parameters
         Node(
             package='turtlebot_sensor',
-            executable='sync_node',
+            executable='cube_detection_node',
             name='cube_detection_node',
             parameters=[{
                 'cube_physical_width_m': cube_size,

@@ -93,7 +93,7 @@ class CubeDetectionNode(Node):
         self.cube_marker_pub = self.create_publisher(Marker, "~/cube_marker", 10)
 
         # --- TF2 ---
-        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_buffer = tf2_ros.Buffer()   
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # --- Other Member Variables ---
@@ -112,6 +112,8 @@ class CubeDetectionNode(Node):
         self.marker_position_threshold = 0.05
         self.published_marker_ids = set()
         self.next_marker_id = 0
+
+        
 
     def _declare_and_load_params(self):
         # Helper to keep __init__ cleaner

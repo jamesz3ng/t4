@@ -26,7 +26,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         'console_scripts': [
-            'sync_node = turtlebot_sensor.sync_node:main',
+            'cube_detection_node = turtlebot_sensor.cube_detection_node:main',
             'explorer = turtlebot_sensor.explorer:main',  # Change this line to match your file name
             'plan_node = turtlebot_sensor.plan_node:main',
             'value_test = turtlebot_sensor.hsv_tuner:main'
