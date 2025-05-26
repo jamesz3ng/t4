@@ -71,6 +71,8 @@ class PlanningNode(Node):
         # self.declare_parameter('bumper_topic_base', 'mobile_base/sensors/bumper_pointcloud') # Removed
         self.declare_parameter('scan_topic_base', 'scan')
         self.declare_parameter('a_star_max_nodes', 60000) # Added parameter for A*
+        self.declare_parameter('inflated_map_topic_base', 'inflated_map') # NEW: Parameter for inflated map topic
+        self.declare_parameter('publish_inflated_map', True) # NEW: Parameter to enable/disable inflated map publishing
 
         map_topic_base = self.get_parameter('map_topic_base').get_parameter_value().string_value
         goal_topic_base = self.get_parameter('goal_topic_base').get_parameter_value().string_value
@@ -79,7 +81,8 @@ class PlanningNode(Node):
         # bumper_topic_base = self.get_parameter('bumper_topic_base').get_parameter_value().string_value # Removed
         scan_topic_base = self.get_parameter('scan_topic_base').get_parameter_value().string_value
         self.a_star_max_nodes = self.get_parameter('a_star_max_nodes').get_parameter_value().integer_value
-
+        inflated_map_topic_base = self.get_parameter('inflated_map_topic_base').get_parameter_value().string_value # NEW
+        self.publish_inflated_map = self.get_parameter('publish_inflated_map').get_parameter_value().bool_value # NEW
 
         self.map_topic_actual = f"{self.robot_namespace}/{map_topic_base}"
         self.goal_topic_actual = f"{self.robot_namespace}/{goal_topic_base}"
@@ -87,6 +90,7 @@ class PlanningNode(Node):
         self.waypoints_topic_actual = f"{self.robot_namespace}/{waypoints_topic_base}"
         # self.bumper_topic_actual = f"{self.robot_namespace}/{bumper_topic_base}" # Removed
         self.scan_topic_actual = f"{self.robot_namespace}/{scan_topic_base}"
+        self.inflated_map_topic_actual = f"{self.robot_namespace}/{inflated_map_topic_base}" # NEW
 
         self.get_logger().info(f"Subscribing to map topic: {self.map_topic_actual}")
         self.get_logger().info(f"Subscribing to goal topic: {self.goal_topic_actual}")
@@ -94,8 +98,9 @@ class PlanningNode(Node):
         self.get_logger().info(f"Subscribing to scan topic: {self.scan_topic_actual}")
         self.get_logger().info(f"Publishing cmd_vel to: {self.cmd_vel_topic_actual}")
         self.get_logger().info(f"Publishing waypoints to: {self.waypoints_topic_actual}")
+        if self.publish_inflated_map: # NEW
+            self.get_logger().info(f"Publishing inflated map to: {self.inflated_map_topic_actual}") # NEW
         self.get_logger().info(f"A* max nodes: {self.a_star_max_nodes}")
-
 
         qos_map = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=1)
         qos_goal = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
@@ -110,6 +115,10 @@ class PlanningNode(Node):
         
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic_actual, 10)
         self.marker_pub = self.create_publisher(MarkerArray, self.waypoints_topic_actual, 10)
+        
+        # NEW: Publisher for inflated map
+        if self.publish_inflated_map:
+            self.inflated_map_pub = self.create_publisher(OccupancyGrid, self.inflated_map_topic_actual, qos_map)
 
         self.path_execution_timer = self.create_timer(0.2, self.path_following_update) # Timer for path following logic
 
@@ -205,7 +214,7 @@ class PlanningNode(Node):
         # Treat cells with high probability of being occupied (e.g., >= 90) as obstacles for inflation
         occupied_mask = (self.map_data_storage >= 90).astype(np.uint8)
         
-        inflation_radius_meters = 0.27 # Define robot radius + safety margin
+        inflation_radius_meters = 0.25 # Define robot radius + safety margin
         if self.map_info_storage.resolution == 0:
             self.get_logger().error("Map resolution is zero, cannot calculate inflation radius in cells.")
             return
@@ -222,6 +231,37 @@ class PlanningNode(Node):
         # Also, don't overwrite unknown (-1) unless it's being inflated from a known obstacle.
         self.inflated_map_storage[inflated_regions_mask > 0] = 100 
         
+        # NEW: Publish the inflated map
+        if self.publish_inflated_map:
+            self.publish_inflated_map_data()
+
+    def publish_inflated_map_data(self):
+        """NEW: Publishes the inflated map as an OccupancyGrid message."""
+        if self.inflated_map_storage is None or self.map_info_storage is None:
+            self.get_logger().warn("Cannot publish inflated map: inflated_map_storage or map_info_storage is None.")
+            return
+        
+        if not rclpy.ok():
+            self.get_logger().warn("publish_inflated_map_data: RCLPY not OK, skipping publish.", throttle_duration_sec=5.0)
+            return
+        
+        # Create OccupancyGrid message
+        inflated_map_msg = OccupancyGrid()
+        
+        # Copy header and map info from original map
+        inflated_map_msg.header.stamp = self.get_clock().now().to_msg()
+        inflated_map_msg.header.frame_id = self.map_tf_frame
+        inflated_map_msg.info = self.map_info_storage  # Same info as original map
+        
+        # Convert inflated map data to flat list
+        inflated_map_msg.data = self.inflated_map_storage.flatten().astype(np.int8).tolist()
+        
+        # Publish the inflated map
+        try:
+            self.inflated_map_pub.publish(inflated_map_msg)
+            self.get_logger().debug("Inflated map published successfully.", throttle_duration_sec=10.0)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish inflated map: {e}")
 
     def goal_callback(self, msg: PoseStamped):
         self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
