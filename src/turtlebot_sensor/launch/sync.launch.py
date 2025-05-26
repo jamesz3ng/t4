@@ -20,7 +20,7 @@ def generate_launch_description():
     
     cube_size_arg = DeclareLaunchArgument(
         'cube_physical_width_m',
-        default_value='0.25',
+        default_value='0.26',
         description='Physical width of the cube in meters'
     )
     

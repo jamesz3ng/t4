@@ -166,11 +166,6 @@ class CubeDetectionNode(Node):
         epsilon = epsilon_factor_val * arc_length
         approx = cv2.approxPolyDP(contour, epsilon, True)
 
-        if not (approx is not None and len(approx) == 4):
-            return False, approx
-        if not cv2.isContourConvex(approx):
-            return False, approx
-
         sides = [np.sqrt(np.sum((approx[i][0] - approx[(i + 1) % 4][0])**2)) for i in range(4)]
         if any(s < 1e-3 for s in sides):
             return False, approx
@@ -178,7 +173,7 @@ class CubeDetectionNode(Node):
         if avg_side < 1e-3:
             return False, approx
 
-        side_tolerance = 0.40
+        side_tolerance = 0.60
         if any(abs(s - avg_side) / avg_side > side_tolerance for s in sides):
             return False, approx
 
