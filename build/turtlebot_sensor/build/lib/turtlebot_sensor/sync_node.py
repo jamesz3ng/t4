@@ -37,7 +37,7 @@ class CubeDetectionNode(Node):
         )
         self.declare_parameter(
             "cube_physical_width_m",
-            0.08,
+            0.25,
             ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE)
         )
 
@@ -131,6 +131,12 @@ class CubeDetectionNode(Node):
         self.frame_count_for_display = 0
 
         self.get_logger().info("Cube detection node initialized. Waiting for camera info and images...")
+
+        # Add these variables for persistent marker tracking
+        self.last_published_marker_position = None
+        self.marker_position_threshold = 0.05  # 5cm threshold for republishing
+        self.published_marker_ids = set()  # Track published markers
+        self.next_marker_id = 0
 
     def camera_info_callback(self, msg: CameraInfo):
         if not self.camera_info_received:
@@ -422,16 +428,16 @@ class CubeDetectionNode(Node):
                         marker.pose.orientation.z = 0.0
                         marker.pose.orientation.w = 1.0
 
-                        marker.scale.x = W_physical_val
-                        marker.scale.y = W_physical_val
-                        marker.scale.z = W_physical_val
+                        marker.scale.x = 0.3
+                        marker.scale.y = 0.3
+                        marker.scale.z = 0.3
 
                         marker.color.r = 1.0
                         marker.color.g = 0.843
                         marker.color.b = 0.0
                         marker.color.a = 0.7
 
-                        marker.lifetime = rclpy.duration.Duration(seconds=2).to_msg()
+                        marker.lifetime = rclpy.duration.Duration(seconds=0).to_msg()
                         self.cube_marker_pub.publish(marker)
                     
                     processed_stable_detections.append(best_detection)
