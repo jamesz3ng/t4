@@ -11,6 +11,7 @@ setup.py
 ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/zip-safe
 launch/detection.launch.py
 launch/mapping.launch.py
+launch/mission.launch.py
 launch/navigation.launch.py
 launch/slam.launch.py
 resource/turtlebot_sensor

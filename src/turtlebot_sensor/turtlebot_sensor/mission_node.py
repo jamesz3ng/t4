@@ -29,7 +29,7 @@ class MissionCoordinator(Node):
             self.get_logger().warn("ROS_DOMAIN_ID environment variable not set! Defaulting to '0'.")
         self.robot_namespace = f"/T{self.robot_id_str}"
         
-        self.declare_parameter('home_arrival_threshold', 0.3)
+        self.declare_parameter('home_arrival_threshold', 0.2)
         self.declare_parameter('target_map_frame', 'odom')
         
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value
@@ -149,23 +149,30 @@ class MissionCoordinator(Node):
     
     def cube_marker_callback(self, msg: Marker):
         """Handle cube detection from cube detection node via marker"""
-        self.get_logger().info(f"Received marker: type={msg.type}, action={msg.action}, frame={msg.header.frame_id}")
+        self.get_logger().info(f"DEBUG: cube_marker_callback CALLED. Current state: {self.current_state.value}. Marker action: {msg.action}, type: {msg.type}, frame='{msg.header.frame_id}'", throttle_duration_sec=1.0)
         
-        if self.current_state in [MissionState.EXPLORING, MissionState.CUBE_DETECTED]:
+        if self.current_state in [MissionState.EXPLORING, MissionState.CUBE_DETECTED]: # CUBE_DETECTED here allows re-detection if needed
             if msg.action == Marker.ADD and msg.type == Marker.CUBE:
-                # Extract cube pose from marker for logging/visualization
-                cube_pose = PoseStamped()
-                cube_pose.header = msg.header
-                cube_pose.pose = msg.pose
                 
-                self.cube_pose = cube_pose
-                self.get_logger().info(f"🎯 Cube detected! Location: ({self.cube_pose.pose.position.x:.2f}, {self.cube_pose.pose.position.y:.2f}) in frame '{msg.header.frame_id}'")
-                self.get_logger().info("🏠 Returning home immediately!")
-                self.transition_to_state(MissionState.CUBE_DETECTED)
+                cube_pose_stamped_from_marker = PoseStamped()
+                cube_pose_stamped_from_marker.header = msg.header # frame_id will be 'base_link' from your echo
+                cube_pose_stamped_from_marker.pose = msg.pose
+                
+                self.get_logger().info(f"Attempting to transform cube pose from '{msg.header.frame_id}' to '{self.target_map_frame}'...")
+                transformed_cube_pose = self.get_transformed_pose(cube_pose_stamped_from_marker, self.target_map_frame) # self.target_map_frame is 'odom'
+
+                if transformed_cube_pose is not None:
+                    self.cube_pose = transformed_cube_pose # Store the TRANSFORMED pose (now in 'odom')
+                    self.get_logger().info(f"🎯 Cube detected! Transformed Location: ({self.cube_pose.pose.position.x:.2f}, {self.cube_pose.pose.position.y:.2f}) in frame '{self.cube_pose.header.frame_id}'")
+                    self.get_logger().info("🏠 Cube registered, proceeding to go home!")
+                    self.transition_to_state(MissionState.CUBE_DETECTED) # This will then immediately go to RETURNING_HOME
+                else:
+                    self.get_logger().warn(f"Failed to transform cube pose from '{msg.header.frame_id}' to '{self.target_map_frame}'. Cube not registered. Check TF tree (odom -> base_link). Mission continues exploring.")
+                    # IMPORTANT: If transform fails, we do NOT transition. Robot keeps exploring.
             else:
-                self.get_logger().info(f"Ignoring marker: action={msg.action}, type={msg.type}")
+                self.get_logger().info(f"Ignoring marker: action={msg.action} (expected {Marker.ADD}), type={msg.type} (expected {Marker.CUBE})", throttle_duration_sec=2.0)
         else:
-            self.get_logger().info(f"Received marker in state {self.current_state.value} - ignoring")
+            self.get_logger().info(f"Received marker in state {self.current_state.value} - ignoring", throttle_duration_sec=2.0)
     
     def start_mission(self):
         """Start the cube search mission"""
