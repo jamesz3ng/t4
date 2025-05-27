@@ -15,8 +15,6 @@ class MissionState(Enum):
     IDLE = "idle"
     EXPLORING = "exploring" 
     CUBE_DETECTED = "cube_detected"
-    APPROACHING_CUBE = "approaching_cube"
-    CUBE_ACQUIRED = "cube_acquired"
     RETURNING_HOME = "returning_home"
     MISSION_COMPLETE = "mission_complete"
     MISSION_FAILED = "mission_failed"
@@ -31,10 +29,7 @@ class MissionCoordinator(Node):
             self.get_logger().warn("ROS_DOMAIN_ID environment variable not set! Defaulting to '0'.")
         self.robot_namespace = f"/T{self.robot_id_str}"
         
-        # Parameters - declare first, then get values
-        self.declare_parameter('cube_approach_distance', 1.5)
         self.declare_parameter('home_arrival_threshold', 0.3)
-        self.declare_parameter('cube_acquisition_time', 3.0)
         self.declare_parameter('target_map_frame', 'odom')
         
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value
@@ -50,21 +45,29 @@ class MissionCoordinator(Node):
         self.cube_pose = None
         self.mission_start_time = None
         
+        # Parameters - declare first, then get values
+        
         # Get parameter values
-        self.cube_approach_distance = self.get_parameter('cube_approach_distance').get_parameter_value().double_value
         self.home_arrival_threshold = self.get_parameter('home_arrival_threshold').get_parameter_value().double_value
-        self.cube_acquisition_time = self.get_parameter('cube_acquisition_time').get_parameter_value().double_value
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value
         
         # QoS Profiles
         qos_reliable = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
         qos_best_effort = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
         
+        qos_reliable_transient_local_for_odom = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,      # Match publisher
+            history=HistoryPolicy.KEEP_LAST,           # Standard choice, depth should ideally match
+            depth=10,                                  # Or whatever depth the odom publisher uses if known, 10 is a safe default
+            durability=DurabilityPolicy.TRANSIENT_LOCAL # Match publisher
+        )
+        
         # Subscribers
         self.get_logger().info(f"Subscribing to odometry: {self.robot_namespace}/odom")
         self.odom_sub = self.create_subscription(
             Odometry, f"{self.robot_namespace}/odom", 
-            self.odom_callback, qos_best_effort)
+            self.odom_callback, 
+            qos_reliable_transient_local_for_odom)
         
         self.cube_marker_sub = self.create_subscription(
             Marker, f"{self.robot_namespace}/cube_marker", 
@@ -95,7 +98,6 @@ class MissionCoordinator(Node):
         self.marker_timer = self.create_timer(2.0, self.publish_mission_markers)
         
         # State tracking
-        self.cube_acquisition_start_time = None
         self.current_robot_pose = None
         
         self.get_logger().info("Mission Coordinator ready. Waiting for start command...")
@@ -130,6 +132,8 @@ class MissionCoordinator(Node):
     
     def odom_callback(self, msg: Odometry):
         """Track robot odometry and record start position"""
+        self.get_logger().info(f"Received odometry in frame: {msg.header.frame_id}", throttle_duration_sec=2.0)
+        
         current_pose_stamped = PoseStamped()
         current_pose_stamped.header = msg.header
         current_pose_stamped.pose = msg.pose.pose
@@ -141,6 +145,7 @@ class MissionCoordinator(Node):
         if self.start_pose is None and self.current_robot_pose is not None:
             self.start_pose = self.current_robot_pose
             self.get_logger().info(f"Start position recorded: ({self.start_pose.pose.position.x:.2f}, {self.start_pose.pose.position.y:.2f}) in frame '{self.start_pose.header.frame_id}'")
+            self.get_logger().info("Mission will start automatically on next timer cycle...")
     
     def cube_marker_callback(self, msg: Marker):
         """Handle cube detection from cube detection node via marker"""
@@ -148,13 +153,14 @@ class MissionCoordinator(Node):
         
         if self.current_state in [MissionState.EXPLORING, MissionState.CUBE_DETECTED]:
             if msg.action == Marker.ADD and msg.type == Marker.CUBE:
-                # Extract cube pose from marker
+                # Extract cube pose from marker for logging/visualization
                 cube_pose = PoseStamped()
                 cube_pose.header = msg.header
                 cube_pose.pose = msg.pose
                 
                 self.cube_pose = cube_pose
-                self.get_logger().info(f"Cube detected via marker at: ({self.cube_pose.pose.position.x:.2f}, {self.cube_pose.pose.position.y:.2f}) in frame '{msg.header.frame_id}'")
+                self.get_logger().info(f"🎯 Cube detected! Location: ({self.cube_pose.pose.position.x:.2f}, {self.cube_pose.pose.position.y:.2f}) in frame '{msg.header.frame_id}'")
+                self.get_logger().info("🏠 Returning home immediately!")
                 self.transition_to_state(MissionState.CUBE_DETECTED)
             else:
                 self.get_logger().info(f"Ignoring marker: action={msg.action}, type={msg.type}")
@@ -193,12 +199,8 @@ class MissionCoordinator(Node):
         
         elif new_state == MissionState.CUBE_DETECTED:
             self.enable_exploration(False)
-            
-        elif new_state == MissionState.APPROACHING_CUBE:
-            self.publish_cube_approach_goal()
-            
-        elif new_state == MissionState.CUBE_ACQUIRED:
-            self.cube_acquisition_start_time = self.get_clock().now()
+            # Immediately transition to returning home
+            self.transition_to_state(MissionState.RETURNING_HOME)
             
         elif new_state == MissionState.RETURNING_HOME:
             self.publish_home_goal()
@@ -217,49 +219,6 @@ class MissionCoordinator(Node):
         msg.data = enable
         self.exploration_enable_pub.publish(msg)
         self.get_logger().info(f"Exploration {'enabled' if enable else 'disabled'}")
-    
-    def publish_cube_approach_goal(self):
-        """Publish goal to approach the cube"""
-        if self.cube_pose is None or self.current_robot_pose is None:
-            self.get_logger().error("Cannot approach cube: missing cube or robot pose")
-            self.transition_to_state(MissionState.MISSION_FAILED)
-            return
-        
-        # Calculate approach position (stay at specified distance from cube)
-        cube_x = self.cube_pose.pose.position.x
-        cube_y = self.cube_pose.pose.position.y
-        robot_x = self.current_robot_pose.pose.position.x
-        robot_y = self.current_robot_pose.pose.position.y
-        
-        # Direction from cube to robot
-        dx = robot_x - cube_x
-        dy = robot_y - cube_y
-        distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance < 0.1:  # Too close to cube to calculate direction
-            self.get_logger().warn("Robot too close to cube to calculate approach direction")
-            self.transition_to_state(MissionState.CUBE_ACQUIRED)
-            return
-        
-        # Normalize direction and scale to approach distance
-        approach_x = cube_x + (dx / distance) * self.cube_approach_distance
-        approach_y = cube_y + (dy / distance) * self.cube_approach_distance
-        
-        # Create approach goal
-        approach_goal = PoseStamped()
-        approach_goal.header.stamp = self.get_clock().now().to_msg()
-        approach_goal.header.frame_id = self.target_map_frame
-        approach_goal.pose.position.x = approach_x
-        approach_goal.pose.position.y = approach_y
-        approach_goal.pose.position.z = 0.0
-        
-        # Face towards the cube
-        angle_to_cube = math.atan2(cube_y - approach_y, cube_x - approach_x)
-        approach_goal.pose.orientation.z = math.sin(angle_to_cube / 2.0)
-        approach_goal.pose.orientation.w = math.cos(angle_to_cube / 2.0)
-        
-        self.goal_pub.publish(approach_goal)
-        self.get_logger().info(f"Published cube approach goal: ({approach_x:.2f}, {approach_y:.2f})")
     
     def publish_home_goal(self):
         """Publish goal to return home"""
@@ -305,31 +264,9 @@ class MissionCoordinator(Node):
             pass
         
         elif self.current_state == MissionState.CUBE_DETECTED:
-            # Transition to approaching cube
-            self.transition_to_state(MissionState.APPROACHING_CUBE)
-        
-        elif self.current_state == MissionState.APPROACHING_CUBE:
-            # Check if we've reached the approach position
-            if self.cube_pose is not None:
-                # Check if we're close enough to the cube
-                if self.current_robot_pose is not None:
-                    cube_x = self.cube_pose.pose.position.x
-                    cube_y = self.cube_pose.pose.position.y
-                    robot_x = self.current_robot_pose.pose.position.x
-                    robot_y = self.current_robot_pose.pose.position.y
-                    
-                    distance_to_cube = math.sqrt((robot_x - cube_x)**2 + (robot_y - cube_y)**2)
-                    
-                    if distance_to_cube <= self.cube_approach_distance * 1.2:  # Allow some tolerance
-                        self.transition_to_state(MissionState.CUBE_ACQUIRED)
-        
-        elif self.current_state == MissionState.CUBE_ACQUIRED:
-            # Wait for acquisition time, then return home
-            if self.cube_acquisition_start_time is not None:
-                elapsed = (self.get_clock().now() - self.cube_acquisition_start_time).nanoseconds / 1e9
-                if elapsed >= self.cube_acquisition_time:
-                    self.get_logger().info("Cube acquired! Returning home...")
-                    self.transition_to_state(MissionState.RETURNING_HOME)
+            # This state should immediately transition to RETURNING_HOME
+            # Handled in transition_to_state method
+            pass
         
         elif self.current_state == MissionState.RETURNING_HOME:
             # Check if we've reached home
