@@ -91,7 +91,7 @@ def generate_launch_description():
                 'hue_min': 10,
                 'hue_max': 39,
                 'sat_min': 119,
-                'sat_max': 183,
+                'sat_max': 255,
                 'val_min': 123,
                 'val_max': 255,
                 
