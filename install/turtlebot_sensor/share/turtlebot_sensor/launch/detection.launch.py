@@ -88,21 +88,21 @@ def generate_launch_description():
                 'use_cv_imshow_debug': True,
                 
                 # HSV parameters (adjust for your cube color)
-                'hue_min': 10,
+                'hue_min': 16,
                 'hue_max': 39,
-                'sat_min': 90,
-                'sat_max': 255,
-                'val_min': 128,
+                'sat_min': 119,
+                'sat_max': 183,
+                'val_min': 123,
                 'val_max': 255,
                 
                 # Detection parameters
-                'min_contour_area': 500,
+                'min_contour_area': 250,
                 'max_contour_area': 30000,
                 'epsilon_factor': 0.02,
                 'confidence_threshold': 10.0,
                 
                 # Temporal smoothing
-                'temporal_buffer_size': 4,
+                'temporal_buffer_size': 3,
                 'min_consistent_detections': 2,
             }],
             output='screen',

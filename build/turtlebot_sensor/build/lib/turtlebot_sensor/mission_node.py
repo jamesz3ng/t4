@@ -29,7 +29,7 @@ class MissionCoordinator(Node):
             self.get_logger().warn("ROS_DOMAIN_ID environment variable not set! Defaulting to '0'.")
         self.robot_namespace = f"/T{self.robot_id_str}"
         
-        self.declare_parameter('home_arrival_threshold', 0.2)
+        self.declare_parameter('home_arrival_threshold', 0.4)
         self.declare_parameter('target_map_frame', 'odom')
         
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value

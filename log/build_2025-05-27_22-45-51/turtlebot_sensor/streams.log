@@ -1,0 +1,29 @@
+[0.507s] Invoking command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/turtlebot_sensor': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/turtlebot_sensor build --build-base /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build install --record /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/install.log --single-version-externally-managed install_data
+[0.623s] running egg_info
+[0.625s] writing ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/PKG-INFO
+[0.627s] writing dependency_links to ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/dependency_links.txt
+[0.629s] writing entry points to ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/entry_points.txt
+[0.631s] writing requirements to ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/requires.txt
+[0.632s] writing top-level names to ../../build/turtlebot_sensor/turtlebot_sensor.egg-info/top_level.txt
+[0.635s] reading manifest file '../../build/turtlebot_sensor/turtlebot_sensor.egg-info/SOURCES.txt'
+[0.635s] adding license file 'LICENSE'
+[0.636s] writing manifest file '../../build/turtlebot_sensor/turtlebot_sensor.egg-info/SOURCES.txt'
+[0.637s] running build
+[0.637s] running build_py
+[0.638s] copying turtlebot_sensor/cube_detection_node.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build/lib/turtlebot_sensor
+[0.646s] running install
+[0.646s] running install_lib
+[0.647s] copying /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build/lib/turtlebot_sensor/cube_detection_node.py -> /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor
+[0.659s] byte-compiling /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor/cube_detection_node.py to cube_detection_node.cpython-310.pyc
+[0.670s] running install_data
+[0.670s] running install_egg_info
+[0.672s] removing '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info' (and everything under it)
+[0.682s] Copying ../../build/turtlebot_sensor/turtlebot_sensor.egg-info to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages/turtlebot_sensor-0.0.0-py3.10.egg-info
+[0.715s] running install_scripts
+[0.729s] Installing cube_detection_node script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.732s] Installing explorer script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.734s] Installing mission_node script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.737s] Installing plan_node script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.739s] Installing value_test script to /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/turtlebot_sensor
+[0.742s] writing list of installed files to '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/install.log'
+[0.765s] Invoked command in '/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/src/turtlebot_sensor' returned '0': PYTHONPATH=/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/install/turtlebot_sensor/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/turtlebot_sensor build --build-base /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/build install --record /afs/ec.auckland.ac.nz/users/j/z/jzen379/unixhome/ros2_ws/build/turtlebot_sensor/install.log --single-version-externally-managed install_data

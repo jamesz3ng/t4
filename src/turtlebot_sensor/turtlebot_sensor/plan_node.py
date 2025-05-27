@@ -214,14 +214,14 @@ class PlanningNode(Node):
         # Treat cells with high probability of being occupied (e.g., >= 90) as obstacles for inflation
         occupied_mask = (self.map_data_storage >= 90).astype(np.uint8)
         
-        inflation_radius_meters = 0.25 # Define robot radius + safety margin
+        inflation_radius_meters = 0.32 # Define robot radius + safety margin
         if self.map_info_storage.resolution == 0:
             self.get_logger().error("Map resolution is zero, cannot calculate inflation radius in cells.")
             return
         
         inflation_radius_cells = math.ceil(inflation_radius_meters / self.map_info_storage.resolution)
         # Kernel size must be odd for maximum_filter symmetric behavior
-        inflation_kernel_size = 2 * inflation_radius_cells + 1
+        inflation_kernel_size = 2 * inflation_radius_cells + 1.5
         # Use maximum_filter to expand occupied regions
         inflated_regions_mask = maximum_filter(occupied_mask, size=inflation_kernel_size)
         
@@ -699,7 +699,7 @@ class PlanningNode(Node):
         robot_yaw_world = current_robot_state['yaw']
         
         # Check if close to waypoints and remove them
-        arrival_threshold_at_waypoint = 0.20  # meters
+        arrival_threshold_at_waypoint = 0.10  # meters
         self.cleanup_passed_waypoints(robot_x_world, robot_y_world, arrival_threshold_at_waypoint**2)
         
         if not self.current_path: # Path might have been completed after cleanup

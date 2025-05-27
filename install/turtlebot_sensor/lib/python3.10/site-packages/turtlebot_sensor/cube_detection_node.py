@@ -255,12 +255,12 @@ class CubeDetectionNode(Node):
         if avg_side < 1e-3: # Avoid division by zero if average side is tiny
              return False, approx
 
-        side_tolerance = 0.60 # This is quite large, allowing for very non-square quads
+        side_tolerance = 0.75 # This is quite large, allowing for very non-square quads
         if any(abs(s - avg_side) / avg_side > side_tolerance for s in sides):
             return False, approx
 
         angles = []
-        angle_tolerance_degrees = 25.0
+        angle_tolerance_degrees = 35.0
         for i in range(4):
             p_curr = approx[i][0].astype(float)
             p_prev = approx[(i - 1 + 4) % 4][0].astype(float)
@@ -501,7 +501,7 @@ class CubeDetectionNode(Node):
                             marker.scale.x = self.param_cube_physical_width_m # Use actual width
                             marker.scale.y = self.param_cube_physical_width_m
                             marker.scale.z = self.param_cube_physical_width_m
-                            marker.color.r = 1.0; marker.color.g = 0.843; marker.color.b = 0.0; marker.color.a = 0.7
+                            marker.color.r = 1.0; marker.color.g = 0.843; marker.color.b = 0.0; marker.color.a = 1.0
                             marker.lifetime = rclpy.duration.Duration(seconds=0).to_msg() # Marker persists for 1s
                             self.cube_marker_pub.publish(marker)
                         
