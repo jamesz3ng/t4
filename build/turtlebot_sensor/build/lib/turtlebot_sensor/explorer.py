@@ -44,7 +44,7 @@ class FrontierExplorer(Node):
         self.declare_parameter('cube_pose_topic', 'cube_pose')
         self.declare_parameter('target_map_frame', 'map')
         self.declare_parameter('step_distance', 1.5) # Default initial step distance
-        self.declare_parameter('min_sweep_step_distance', 0.5)
+        self.declare_parameter('min_sweep_step_distance', 1)
         self.declare_parameter('sweep_step_reduction_factor', 0.75)
         self.declare_parameter('qos_depth', 10)
         self.declare_parameter('max_specific_goal_failures', 2) # How many times to try a specific coordinate

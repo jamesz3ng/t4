@@ -29,7 +29,7 @@ class MissionCoordinator(Node):
             self.get_logger().warn("ROS_DOMAIN_ID environment variable not set! Defaulting to '0'.")
         self.robot_namespace = f"/T{self.robot_id_str}"
         
-        self.declare_parameter('home_arrival_threshold', 0.2)
+        self.declare_parameter('home_arrival_threshold', 0.4)
         self.declare_parameter('target_map_frame', 'odom')
         
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value
@@ -132,7 +132,7 @@ class MissionCoordinator(Node):
     
     def odom_callback(self, msg: Odometry):
         """Track robot odometry and record start position"""
-        self.get_logger().info(f"Received odometry in frame: {msg.header.frame_id}", throttle_duration_sec=2.0)
+        # self.get_logger().info(f"Received odometry in frame: {msg.header.frame_id}", throttle_duration_sec=2.0)
         
         current_pose_stamped = PoseStamped()
         current_pose_stamped.header = msg.header
@@ -149,7 +149,6 @@ class MissionCoordinator(Node):
     
     def cube_marker_callback(self, msg: Marker):
         """Handle cube detection from cube detection node via marker"""
-        self.get_logger().info(f"DEBUG: cube_marker_callback CALLED. Current state: {self.current_state.value}. Marker action: {msg.action}, type: {msg.type}, frame='{msg.header.frame_id}'", throttle_duration_sec=1.0)
         
         if self.current_state in [MissionState.EXPLORING, MissionState.CUBE_DETECTED]: # CUBE_DETECTED here allows re-detection if needed
             if msg.action == Marker.ADD and msg.type == Marker.CUBE:

@@ -8,7 +8,7 @@ from std_msgs.msg import ColorRGBA, Header
 from sensor_msgs.msg import LaserScan # PointCloud2 removed
 from tf2_ros import Buffer, TransformListener
 # import tf2_ros # Not needed directly if Buffer and TransformListener are imported
-
+import tf2_geometry_msgs 
 import numpy as np
 import heapq
 from scipy.ndimage import maximum_filter
@@ -263,31 +263,67 @@ class PlanningNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to publish inflated map: {e}")
 
-    def goal_callback(self, msg: PoseStamped):
-        self.get_logger().info(f"Goal received in frame '{msg.header.frame_id}': Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})")
-        
-        # Reset relevant states for a new goal
-        self.current_path = [] # Clear previous path
+    def goal_callback(self, msg: PoseStamped): # msg is the incoming PoseStamped goal
+            self.get_logger().info(
+                f"Goal received in frame '{msg.header.frame_id}' at stamp {msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}: "
+                f"Pos(x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f})"
+            )
+            
+            self.current_path = [] # Clear previous path
 
-        transformed_goal_pose = msg.pose # Default to using the pose directly if already in map frame
-        if msg.header.frame_id != self.map_tf_frame:
-            self.get_logger().warn(f"Goal is in frame '{msg.header.frame_id}'. Attempting to transform to '{self.map_tf_frame}'.")
-            try:
-                # Ensure TF buffer can transform and then perform the transform
-                # Use a timeout for can_transform as well, though lookup_transform will also timeout
-                self.tf_buffer.can_transform(self.map_tf_frame, msg.header.frame_id, rclpy.time.Time(seconds=0), timeout=rclpy.duration.Duration(seconds=1.0))
-                transformed_goal_stamped = self.tf_buffer.transform(msg, self.map_tf_frame, timeout=rclpy.duration.Duration(seconds=1.0))
-                transformed_goal_pose = transformed_goal_stamped.pose
-                self.get_logger().info(f"Goal transformed to '{self.map_tf_frame}': Pos(x={transformed_goal_pose.position.x:.2f}, y={transformed_goal_pose.position.y:.2f})")
-            except Exception as e:
-                self.get_logger().error(f"Failed to transform goal from '{msg.header.frame_id}' to '{self.map_tf_frame}': {e}")
-                self.current_goal_pose = None # Invalidate goal
-                self.current_path = []
-                self.publish_path_markers() # Clear markers
-                return
-        
-        self.current_goal_pose = transformed_goal_pose # Store geometry_msgs/Pose
-        self.plan_new_path()
+            transformed_goal_pose_msg_only = msg.pose # This will be geometry_msgs/Pose
+            target_goal_frame_id = msg.header.frame_id # Initial frame
+            new_goal_stamp = msg.header.stamp # Preserve original stamp initially
+
+            if msg.header.frame_id != self.map_tf_frame: # self.map_tf_frame is 'map'
+                self.get_logger().warn(
+                    f"Goal is in frame '{msg.header.frame_id}'. Attempting to transform to '{self.map_tf_frame}'. "
+                    f"Goal stamp: {msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}"
+                )
+                try:
+                    # 1. Lookup the transform
+                    # We want to transform AT THE TIME OF THE GOAL MESSAGE if possible,
+                    # or use Time(0) for latest if that fails or is preferred.
+                    # Using msg.header.stamp might be problematic if TF data for that exact instant isn't available.
+                    # Using Time(0) is often more robust for "current best effort" transform.
+                    
+                    transform_to_map_stamped = self.tf_buffer.lookup_transform(
+                        self.map_tf_frame,        # Target frame
+                        msg.header.frame_id,      # Source frame (e.g., 'odom')
+                        rclpy.time.Time(seconds=0), # Time(0) for latest available transform
+                        # msg.header.stamp,       # Alternative: use goal's timestamp
+                        timeout=rclpy.duration.Duration(seconds=1.0)
+                    )
+
+                    # 2. Perform the transformation on the .pose part
+                    transformed_goal_pose_msg_only = tf2_geometry_msgs.do_transform_pose(msg.pose, transform_to_map_stamped)
+                    
+                    target_goal_frame_id = self.map_tf_frame # Update frame_id
+                    new_goal_stamp = transform_to_map_stamped.header.stamp # Use the stamp of the transform
+
+                    self.get_logger().info(
+                        f"Goal transformed to '{target_goal_frame_id}' (using transform at stamp {new_goal_stamp.sec}.{new_goal_stamp.nanosec:09d}): "
+                        f"Pos(x={transformed_goal_pose_msg_only.position.x:.2f}, y={transformed_goal_pose_msg_only.position.y:.2f})"
+                    )
+
+                except Exception as e:
+                    self.get_logger().error(
+                        f"Failed to transform goal from '{msg.header.frame_id}' (stamp {msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}) "
+                        f"to '{self.map_tf_frame}': {e}"
+                    )
+                    self.current_goal_pose = None 
+                    self.current_path = []
+                    self.publish_path_markers() 
+                    return
+            
+            # Store the transformed geometry_msgs/Pose object for planning
+            self.current_goal_pose = transformed_goal_pose_msg_only 
+            # Note: self.current_goal_pose is now just a Pose, not PoseStamped.
+            # Your plan_new_path() uses self.current_goal_pose.position.x, which is fine.
+            # Ensure that if you need header info later from the goal, you store it appropriately.
+            # For A* planning, only the position (and perhaps orientation for the final yaw) matters from current_goal_pose.
+
+            self.plan_new_path()
 
     def world_to_map_grid(self, world_x, world_y):
         if self.map_info_storage is None: 
