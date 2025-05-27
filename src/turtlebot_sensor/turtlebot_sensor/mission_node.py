@@ -45,8 +45,6 @@ class MissionCoordinator(Node):
         self.cube_pose = None
         self.mission_start_time = None
         
-        # Parameters - declare first, then get values
-        
         # Get parameter values
         self.home_arrival_threshold = self.get_parameter('home_arrival_threshold').get_parameter_value().double_value
         self.target_map_frame = self.get_parameter('target_map_frame').get_parameter_value().string_value
@@ -64,14 +62,16 @@ class MissionCoordinator(Node):
         
         # Subscribers
         self.get_logger().info(f"Subscribing to odometry: {self.robot_namespace}/odom")
+        marker_topic_name = "/cube_detection_node/cube_marker"
+        
         self.odom_sub = self.create_subscription(
             Odometry, f"{self.robot_namespace}/odom", 
             self.odom_callback, 
             qos_reliable_transient_local_for_odom)
         
         self.cube_marker_sub = self.create_subscription(
-            Marker, f"{self.robot_namespace}/cube_marker", 
-            self.cube_marker_callback, qos_best_effort)
+            Marker, marker_topic_name, 
+            self.cube_marker_callback, qos_reliable)
         
         # Publishers
         self.mission_state_pub = self.create_publisher(
