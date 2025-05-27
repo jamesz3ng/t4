@@ -8,7 +8,7 @@ import math
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from collections import deque
-
+from std_msgs.msg import Bool
 import tf2_ros
 from tf2_geometry_msgs import do_transform_pose
 
@@ -106,6 +106,23 @@ class FrontierExplorer(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.timer = self.create_timer(5.0, self.timer_callback)
 
+        self.declare_parameter('use_mission_coordinator', True)
+        self.use_mission_coordinator = self.get_parameter('use_mission_coordinator').get_parameter_value().bool_value
+        self.exploration_enabled = True
+
+        if self.use_mission_coordinator:
+            self.exploration_enable_sub = self.create_subscription(
+                Bool, f"{self.robot_namespace}/exploration_enable", 
+                self.exploration_enable_callback, qos_profile_goal)
+            self.get_logger().info("Mission coordinator integration enabled")
+        else:
+            # In standalone mode, monitor cube markers to know when to stop exploring
+            from visualization_msgs.msg import Marker
+            self.cube_marker_sub = self.create_subscription(
+                Marker, f"{self.robot_namespace}/cube_marker",
+                self.cube_marker_callback, qos_profile_cube)
+            self.get_logger().info("Running in standalone mode - monitoring cube markers")            
+
     # map_callback, get_transformed_pose, cube_callback mostly unchanged
     # odom_callback needs refined logic for resetting failure counts
     def map_callback(self, msg: OccupancyGrid):
@@ -166,7 +183,17 @@ class FrontierExplorer(Node):
         except Exception as e: self.get_logger().warn(f"TF EXCEPTION transforming from '{source_frame}' to '{target_frame}': {e}. Input pose stamp: {input_pose_stamped.header.stamp.sec}.{input_pose_stamped.header.stamp.nanosec:09d}.", throttle_duration_sec=2.0); return None
 
     def cube_callback(self, msg: PoseStamped):
-        # ... (same as your previous, but ensure publish_goal calls self.publish_goal(goal, from_sweep=False)) ...
+
+        if self.use_mission_coordinator:
+        # Just stop seeking when coordinator takes over
+            if self.seeking_cube:
+                self.get_logger().info("Cube detected - coordinator will handle approach")
+                self.seeking_cube = False
+                self.cube_seen_counter = 0
+                # Stop robot movement
+                self.cmd_pub.publish(Twist())
+        return
+
         if self.returning_home: return
         x_rel_cube, y_rel_cube = msg.pose.position.x, msg.pose.position.y 
         if x_rel_cube == 0.0 and y_rel_cube == 0.0: 
@@ -241,6 +268,10 @@ class FrontierExplorer(Node):
 
 
     def timer_callback(self):
+
+        if self.use_mission_coordinator and not self.exploration_enabled:
+            return  # Don't explore if coordinator has disabled exploration
+
         current_robot_pose_map = self.get_transformed_pose(self.robot_pose_odom, self.target_map_frame)
         if self.map_data is None or current_robot_pose_map is None: return
         if self.returning_home: # ... (cube marker logic) ...
@@ -370,6 +401,28 @@ class FrontierExplorer(Node):
         # The step reduction logic in timer_callback should eventually handle the former.
         # If recently_blacklisted_world_goals fills up, it will eventually clear old ones.
         return None
+    def exploration_enable_callback(self, msg: Bool):
+        """Handle exploration enable/disable from mission coordinator"""
+        old_state = self.exploration_enabled
+        self.exploration_enabled = msg.data
+        
+        if old_state != self.exploration_enabled:
+            self.get_logger().info(f"Exploration {'enabled' if self.exploration_enabled else 'disabled'} by coordinator")
+            
+            # If exploration is disabled, stop current movement
+            if not self.exploration_enabled:
+                stop_cmd = Twist()
+                self.cmd_pub.publish(stop_cmd)
+
+    def cube_marker_callback(self, msg: Marker):
+        """Handle cube detection via marker (standalone mode only)"""
+        if msg.action == Marker.ADD and msg.type == Marker.CUBE:
+            self.get_logger().info("Cube marker detected - stopping exploration")
+            self.seeking_cube = True
+            # In standalone mode, could transition to cube approach behavior
+            # For now, just stop exploring
+            stop_cmd = Twist()
+            self.cmd_pub.publish(stop_cmd)
 
 def main(args=None): # Unchanged
     rclpy.init(args=args)

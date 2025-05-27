@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import CompressedImage, CameraInfo, Image
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 import tf2_ros
 import tf2_geometry_msgs # Registers PointStamped transforms
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
@@ -50,13 +50,13 @@ class CubeDetectionNode(Node):
         self.param_min_consistent_detections: int = 0
         self.param_confidence_threshold: float = 0.0
         # Debug Display
-        self.param_publish_debug_image: bool = False
-        self.param_use_cv_imshow_debug: bool = False
+        self.param_publish_debug_image: bool = True
+        self.param_use_cv_imshow_debug: bool = True
         self.param_debug_display_every_n_frames: int = 0
         # TF and Marker
         self.param_camera_optical_frame_id: str = ""
         self.param_target_map_frame_id: str = ""
-        self.param_publish_rviz_marker: bool = False
+        self.param_publish_rviz_marker: bool = True
 
         self._declare_and_load_params() # Helper to declare and load initial values
         self.add_on_set_parameters_callback(self.parameters_callback) # To update cached params
@@ -91,6 +91,7 @@ class CubeDetectionNode(Node):
         self.debug_image_pub = self.create_publisher(Image, "~/debug_image/processed", 10)
         self.debug_mask_pub = self.create_publisher(Image, "~/debug_image/mask", 10)
         self.cube_marker_pub = self.create_publisher(Marker, "~/cube_marker", 10)
+        self.cube_pose_pub = self.create_publisher(PoseStamped, f"/T{self.robot_id_str}/cube_pose", 10)
 
         # --- TF2 ---
         self.tf_buffer = tf2_ros.Buffer()   
@@ -162,7 +163,7 @@ class CubeDetectionNode(Node):
         self.param_camera_optical_frame_id = self.get_parameter("camera_optical_frame_id").get_parameter_value().string_value
         self.param_target_map_frame_id = self.get_parameter("target_map_frame_id").get_parameter_value().string_value
         self.param_publish_rviz_marker = self.get_parameter("publish_rviz_marker").get_parameter_value().bool_value
-
+        
         # Update deque maxlen if params change
         if hasattr(self, 'detection_buffer') and self.detection_buffer.maxlen != self.param_temporal_buffer_size:
             self.detection_buffer = deque(list(self.detection_buffer), maxlen=self.param_temporal_buffer_size)
@@ -501,7 +502,7 @@ class CubeDetectionNode(Node):
                             marker.scale.y = self.param_cube_physical_width_m
                             marker.scale.z = self.param_cube_physical_width_m
                             marker.color.r = 1.0; marker.color.g = 0.843; marker.color.b = 0.0; marker.color.a = 0.7
-                            marker.lifetime = rclpy.duration.Duration(seconds=1).to_msg() # Marker persists for 1s
+                            marker.lifetime = rclpy.duration.Duration(seconds=0).to_msg() # Marker persists for 1s
                             self.cube_marker_pub.publish(marker)
                         
                         processed_stable_detections.append(best_detection)
