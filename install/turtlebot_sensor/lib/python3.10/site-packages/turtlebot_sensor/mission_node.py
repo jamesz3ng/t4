@@ -214,6 +214,8 @@ class MissionCoordinator(Node):
         elif new_state == MissionState.MISSION_COMPLETE:
             self.stop_robot()
             self.get_logger().info("🎉 Mission completed successfully!")
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
             
         elif new_state == MissionState.MISSION_FAILED:
             self.stop_robot()

@@ -88,7 +88,7 @@ def generate_launch_description():
                 'use_cv_imshow_debug': True,
                 
                 # HSV parameters (adjust for your cube color)
-                'hue_min': 16,
+                'hue_min': 10,
                 'hue_max': 39,
                 'sat_min': 119,
                 'sat_max': 183,

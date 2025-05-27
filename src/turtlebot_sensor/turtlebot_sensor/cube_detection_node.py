@@ -121,11 +121,11 @@ class CubeDetectionNode(Node):
         self.declare_parameter("image_sub_topic", f"/T{self.robot_id_str}/oakd/rgb/image_raw/compressed", ParameterDescriptor(type=ParameterType.PARAMETER_STRING))
         self.declare_parameter("camera_info_sub_topic", f"/T{self.robot_id_str}/oakd/rgb/camera_info", ParameterDescriptor(type=ParameterType.PARAMETER_STRING))
         self.declare_parameter("cube_physical_width_m", 0.25, ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE))
-        self.declare_parameter("hue_min", 15, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("hue_min", 10, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("hue_max", 39, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("sat_min", 90, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("sat_max", 211, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
-        self.declare_parameter("val_min", 123, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("sat_max", 255, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
+        self.declare_parameter("val_min", 80, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("val_max", 255, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("min_contour_area", 500, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
         self.declare_parameter("max_contour_area", 30000, ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER))
@@ -255,7 +255,7 @@ class CubeDetectionNode(Node):
         if avg_side < 1e-3: # Avoid division by zero if average side is tiny
              return False, approx
 
-        side_tolerance = 0.75 # This is quite large, allowing for very non-square quads
+        side_tolerance = 0.60 # This is quite large, allowing for very non-square quads
         if any(abs(s - avg_side) / avg_side > side_tolerance for s in sides):
             return False, approx
 
